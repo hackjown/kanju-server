@@ -1,0 +1,1 @@
+import{j as s}from"./react-vendor-P5XnYvWb.js";import{c as a}from"./assistant-ui-primitives-DalFKjZn.js";function i({className:n}){return s.jsxs("span",{className:a("thinking-dots",n),"aria-hidden":!0,children:[s.jsx("span",{}),s.jsx("span",{}),s.jsx("span",{})]})}export{i as L};

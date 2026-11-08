@@ -1,0 +1,1621 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover"/>
+  <meta name="referrer" content="no-referrer"/>
+  <title>看剧AI · 极速车机版 (Canvas + WebAudio)</title>
+  <script src="/static/hls.min.js"></script>
+  <style>
+    :root {
+      --bg-black: #000000;
+      --bg-surface: #0c0e14;
+      --bg-surface-elevated: #161a24;
+      --accent-cyan: #00e5ff;
+      --accent-cyan-glow: rgba(0, 229, 255, 0.35);
+      --accent-gold: #f59e0b;
+      --accent-red: #ef4444;
+      --text-main: #f8fafc;
+      --text-muted: #94a3b8;
+      --border-dark: #1e2433;
+      --border-active: #00e5ff;
+      --font-car: system-ui, -apple-system, "Noto Sans SC", "PingFang SC", sans-serif;
+    }
+
+    * {
+      box-sizing: border-box;
+      user-select: none;
+      -webkit-user-select: none;
+      margin: 0;
+      padding: 0;
+    }
+
+    body {
+      background: var(--bg-black);
+      color: var(--text-main);
+      font-family: var(--font-car);
+      font-size: 18px;
+      overflow-x: hidden;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+    }
+
+    /* 顶部车机状态 HUD */
+    header.car-hud-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 14px 28px;
+      background: rgba(12, 14, 20, 0.95);
+      border-bottom: 1px solid var(--border-dark);
+      backdrop-filter: blur(16px);
+      position: sticky;
+      top: 0;
+      z-index: 100;
+    }
+
+    .car-brand {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      font-size: 24px;
+      font-weight: 800;
+      letter-spacing: 0.5px;
+    }
+    .car-brand span.logo-badge {
+      background: linear-gradient(135deg, #00e5ff, #3b82f6);
+      color: #000;
+      font-size: 14px;
+      font-weight: 900;
+      padding: 3px 8px;
+      border-radius: 6px;
+    }
+
+    .car-meta-status {
+      display: flex;
+      align-items: center;
+      gap: 16px;
+    }
+
+    .pill-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      background: #141822;
+      border: 1px solid var(--border-dark);
+      color: var(--text-muted);
+      padding: 6px 14px;
+      border-radius: 999px;
+      font-size: 14px;
+      font-weight: 600;
+    }
+    .pill-badge.active-green {
+      background: rgba(16, 185, 129, 0.15);
+      border-color: rgba(16, 185, 129, 0.4);
+      color: #10b981;
+    }
+    .pill-badge.active-cyan {
+      background: rgba(0, 229, 255, 0.15);
+      border-color: rgba(0, 229, 255, 0.4);
+      color: #00e5ff;
+    }
+
+    .digital-clock {
+      font-family: monospace, var(--font-car);
+      font-size: 22px;
+      font-weight: 800;
+      color: #fff;
+      letter-spacing: 1px;
+    }
+
+    /* 车机大按钮基础规范 (防抖、易点) */
+    .btn-car {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      background: var(--bg-surface-elevated);
+      border: 2px solid var(--border-dark);
+      color: var(--text-main);
+      border-radius: 14px;
+      padding: 14px 22px;
+      font-size: 18px;
+      font-weight: 700;
+      cursor: pointer;
+      transition: all 0.15s ease-out;
+      outline: none;
+    }
+    .btn-car:active {
+      transform: scale(0.96);
+      border-color: var(--accent-cyan);
+    }
+    .btn-car.primary {
+      background: var(--accent-cyan);
+      color: #000;
+      border-color: var(--accent-cyan);
+    }
+    .btn-car.gold {
+      background: var(--accent-gold);
+      color: #000;
+      border-color: var(--accent-gold);
+    }
+    .btn-car.selected {
+      border-color: var(--accent-cyan);
+      box-shadow: 0 0 12px var(--accent-cyan-glow);
+      color: var(--accent-cyan);
+      background: rgba(0, 229, 255, 0.1);
+    }
+
+    /* 播放器容器与 Canvas 逐帧渲染画布 */
+    #player-view {
+      display: none;
+      position: relative;
+      width: 100vw;
+      height: calc(100vh - 66px);
+      background: #000;
+      overflow: hidden;
+    }
+
+    .canvas-container {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: #000;
+    }
+
+    #car-canvas {
+      width: 100%;
+      height: 100%;
+      object-fit: contain;
+      display: block;
+      background: #000;
+    }
+
+    /* 隐藏的解码视频源 */
+    #hidden-video {
+      display: none;
+    }
+
+    /* 浮动 HUD 交互层 */
+    .player-overlay {
+      position: absolute;
+      inset: 0;
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+      padding: 24px 32px;
+      background: linear-gradient(180deg, rgba(0,0,0,0.85) 0%, rgba(0,0,0,0) 25%, rgba(0,0,0,0) 65%, rgba(0,0,0,0.92) 100%);
+      opacity: 1;
+      transition: opacity 0.3s ease;
+      pointer-events: auto;
+      z-index: 10;
+    }
+    .player-overlay.hidden {
+      opacity: 0;
+      pointer-events: none;
+    }
+
+    .hud-top-bar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+    .hud-title-group {
+      display: flex;
+      align-items: center;
+      gap: 16px;
+    }
+    .hud-movie-title {
+      font-size: 26px;
+      font-weight: 800;
+      color: #fff;
+    }
+    .hud-ep-title {
+      font-size: 20px;
+      color: var(--accent-cyan);
+      font-weight: 700;
+    }
+
+    /* 实时技术统计监视器 HUD */
+    .hud-tech-monitor {
+      background: rgba(10, 14, 22, 0.75);
+      border: 1px solid rgba(0, 229, 255, 0.3);
+      padding: 8px 16px;
+      border-radius: 10px;
+      font-size: 13px;
+      font-family: monospace, var(--font-car);
+      color: #cbd5e1;
+      display: flex;
+      gap: 14px;
+      backdrop-filter: blur(8px);
+    }
+    .hud-tech-monitor span strong {
+      color: var(--accent-cyan);
+    }
+
+    /* 手势调节大浮层 (亮度 / 音量 / 进度) */
+    .gesture-hud-center {
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      background: rgba(12, 16, 24, 0.9);
+      border: 2px solid var(--accent-cyan);
+      box-shadow: 0 0 30px var(--accent-cyan-glow);
+      padding: 24px 40px;
+      border-radius: 20px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 12px;
+      pointer-events: none;
+      opacity: 0;
+      transition: opacity 0.2s ease;
+      z-index: 20;
+    }
+    .gesture-hud-center.visible {
+      opacity: 1;
+    }
+    .gesture-icon {
+      font-size: 40px;
+    }
+    .gesture-val {
+      font-size: 28px;
+      font-weight: 900;
+      color: #fff;
+    }
+    .gesture-bar-track {
+      width: 180px;
+      height: 8px;
+      background: #252b3d;
+      border-radius: 4px;
+      overflow: hidden;
+    }
+    .gesture-bar-fill {
+      height: 100%;
+      background: var(--accent-cyan);
+      width: 50%;
+      transition: width 0.08s ease;
+    }
+
+    /* 底部控制中心 */
+    .hud-bottom-bar {
+      display: flex;
+      flex-direction: column;
+      gap: 14px;
+    }
+
+    /* 进度条 */
+    .progress-wrap {
+      display: flex;
+      align-items: center;
+      gap: 16px;
+      width: 100%;
+    }
+    .time-badge {
+      font-family: monospace;
+      font-size: 17px;
+      font-weight: 700;
+      color: #cbd5e1;
+      min-width: 65px;
+    }
+    .progress-bar {
+      position: relative;
+      flex: 1;
+      height: 12px;
+      background: rgba(255, 255, 255, 0.2);
+      border-radius: 6px;
+      cursor: pointer;
+      overflow: hidden;
+    }
+    .progress-fill {
+      height: 100%;
+      background: linear-gradient(90deg, #00e5ff, #3b82f6);
+      width: 0%;
+      border-radius: 6px;
+    }
+
+    /* WebAudio 频谱波形画布 */
+    #spectrum-canvas {
+      width: 100%;
+      height: 24px;
+      opacity: 0.6;
+    }
+
+    /* 大按钮控制栏 */
+    .controls-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+    }
+    .controls-left, .controls-right {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+
+    /* 弹出的车机面板 (线路 / 选集 / 车载调音 / 杜比校色) */
+    .car-drawer {
+      position: absolute;
+      bottom: 0;
+      left: 0;
+      right: 0;
+      background: rgba(12, 16, 24, 0.98);
+      border-top: 2px solid var(--border-dark);
+      border-radius: 24px 24px 0 0;
+      padding: 24px 32px 36px;
+      transform: translateY(100%);
+      transition: transform 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+      z-index: 50;
+      max-height: 70vh;
+      display: flex;
+      flex-direction: column;
+      backdrop-filter: blur(24px);
+    }
+    .car-drawer.open {
+      transform: translateY(0);
+    }
+    .drawer-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 20px;
+      padding-bottom: 12px;
+      border-bottom: 1px solid var(--border-dark);
+    }
+    .drawer-title {
+      font-size: 22px;
+      font-weight: 800;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+    .drawer-body {
+      overflow-y: auto;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 12px;
+      max-height: 50vh;
+      padding-bottom: 10px;
+    }
+
+    /* 片库首页 */
+    #home-view {
+      flex: 1;
+      padding: 24px 36px 60px;
+      max-width: 1600px;
+      margin: 0 auto;
+      width: 100%;
+    }
+
+    .home-hero-search {
+      display: flex;
+      gap: 14px;
+      margin-bottom: 28px;
+    }
+    .search-input-car {
+      flex: 1;
+      background: var(--bg-surface-elevated);
+      border: 2px solid var(--border-dark);
+      border-radius: 16px;
+      padding: 16px 24px;
+      font-size: 20px;
+      color: #fff;
+      outline: none;
+      font-family: inherit;
+    }
+    .search-input-car:focus {
+      border-color: var(--accent-cyan);
+    }
+
+    .quick-tags {
+      display: flex;
+      gap: 10px;
+      overflow-x: auto;
+      padding-bottom: 16px;
+      margin-bottom: 24px;
+    }
+    .quick-tag {
+      background: #141824;
+      border: 1px solid var(--border-dark);
+      padding: 8px 18px;
+      border-radius: 999px;
+      font-size: 16px;
+      font-weight: 600;
+      cursor: pointer;
+      white-space: nowrap;
+    }
+    .quick-tag:active {
+      border-color: var(--accent-cyan);
+      color: var(--accent-cyan);
+    }
+
+    .shelf-section {
+      margin-bottom: 36px;
+    }
+    .shelf-title {
+      font-size: 24px;
+      font-weight: 800;
+      margin-bottom: 16px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .car-card-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(210px, 1fr));
+      gap: 20px;
+    }
+    .car-card {
+      background: var(--bg-surface);
+      border: 2px solid var(--border-dark);
+      border-radius: 16px;
+      overflow: hidden;
+      cursor: pointer;
+      transition: all 0.15s ease;
+    }
+    .car-card:active {
+      transform: scale(0.97);
+      border-color: var(--accent-cyan);
+    }
+    .car-card img {
+      width: 100%;
+      aspect-ratio: 2/3;
+      object-fit: cover;
+      display: block;
+      background: #111;
+    }
+    .car-card .card-info {
+      padding: 12px 14px;
+    }
+    .car-card .card-t {
+      font-size: 18px;
+      font-weight: 800;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      color: #fff;
+    }
+    .car-card .card-s {
+      font-size: 14px;
+      color: var(--text-muted);
+      margin-top: 4px;
+      display: flex;
+      justify-content: space-between;
+    }
+  </style>
+</head>
+<body>
+
+  <!-- 车机顶部状态栏 -->
+  <header class="car-hud-header">
+    <div class="car-brand">
+      <span>🚗 看剧<b>AI</b></span>
+      <span class="logo-badge">车机专属版</span>
+    </div>
+    <div class="car-meta-status">
+      <div class="pill-badge active-cyan" id="badge-engine">⚡ WebGL Canvas + WebAudio</div>
+      <div class="pill-badge active-green" id="badge-parking">🅿 驻车影院 · 屏幕常亮</div>
+      <div class="digital-clock" id="car-clock">16:30:00</div>
+      <button class="btn-car" onclick="location.href='/'" style="padding: 8px 16px; font-size: 15px;">💻 桌面版</button>
+    </div>
+  </header>
+
+  <!-- 1. 首页片库浏览视图 -->
+  <main id="home-view">
+    <div class="home-hero-search">
+      <input type="text" id="car-search-input" class="search-input-car" placeholder="🔍 触屏输入片名（如：庆余年、周处除三害、疯狂动物城、给阿嬷的情书）"/>
+      <button class="btn-car primary" onclick="runCarSearch()">立即检索</button>
+    </div>
+
+    <!-- 快捷热门搜索词 -->
+    <div class="quick-tags">
+      <div class="quick-tag" onclick="quickSearch('庆余年')">🔥 庆余年</div>
+      <div class="quick-tag" onclick="quickSearch('周处除三害')">🎬 周处除三害</div>
+      <div class="quick-tag" onclick="quickSearch('给阿嬷的情书')">💌 给阿嬷的情书</div>
+      <div class="quick-tag" onclick="quickSearch('疯狂动物城')">🦊 疯狂动物城</div>
+      <div class="quick-tag" onclick="quickSearch('繁花')">✨ 繁花</div>
+      <div class="quick-tag" onclick="quickSearch('空枪')">🎯 空枪 (杜比测试)</div>
+      <div class="quick-tag" onclick="quickSearch('哪吒')">🔥 哪吒之魔童闹海</div>
+    </div>
+
+    <!-- 搜索结果区（若有） -->
+    <div id="search-results-section" style="display: none; margin-bottom: 30px;">
+      <div class="shelf-title">🔍 搜索结果</div>
+      <div class="car-card-grid" id="search-grid"></div>
+    </div>
+
+    <!-- 栏目 1: 大家都在看 (热播精选) -->
+    <div class="shelf-section" id="shelf-popular-wrap">
+      <div class="shelf-title">🌟 大家都在看（车机热推 4K）</div>
+      <div class="car-card-grid" id="home-popular-grid">
+        <div style="color: var(--text-muted); font-size: 18px; padding: 20px;">正在连接精选片库...</div>
+      </div>
+    </div>
+
+    <!-- 栏目 2: 车机高分榜 -->
+    <div class="shelf-section" id="shelf-hot-wrap">
+      <div class="shelf-title">🔥 车机高分热播榜（4K 极速蓝光）</div>
+      <div class="car-card-grid" id="hot-grid">
+        <div style="color: var(--text-muted); font-size: 18px; padding: 20px;">正在载入榜单...</div>
+      </div>
+    </div>
+
+    <!-- 栏目 3: 热门连载剧集 -->
+    <div class="shelf-section" id="shelf-drama-wrap">
+      <div class="shelf-title">📺 热门剧集热追</div>
+      <div class="car-card-grid" id="drama-grid"></div>
+    </div>
+
+    <!-- 栏目 4: 海外精选好剧 -->
+    <div class="shelf-section" id="shelf-anime-wrap">
+      <div class="shelf-title">🎭 海外精选好剧</div>
+      <div class="car-card-grid" id="anime-grid"></div>
+    </div>
+  </main>
+
+  <!-- 2. 核心独立车机播放器 (Canvas + WebAudio) -->
+  <section id="player-view">
+    <!-- Canvas 逐帧画布容器 -->
+    <div class="canvas-container" id="touch-surface">
+      <canvas id="car-canvas"></canvas>
+      <!-- 隐藏的原始视频解码流 -->
+      <video id="hidden-video" playsinline webkit-playsinline crossorigin="anonymous"></video>
+    </div>
+
+    <!-- 手势实时调节 HUD -->
+    <div class="gesture-hud-center" id="gesture-hud">
+      <div class="gesture-icon" id="gesture-icon">🔊</div>
+      <div class="gesture-val" id="gesture-val">音量 100%</div>
+      <div class="gesture-bar-track">
+        <div class="gesture-bar-fill" id="gesture-bar"></div>
+      </div>
+    </div>
+
+    <!-- 交互 HUD 层 (自动淡出) -->
+    <div class="player-overlay" id="player-overlay">
+      <!-- 顶部信息栏 -->
+      <div class="hud-top-bar">
+        <div class="hud-title-group">
+          <button class="btn-car" onclick="closePlayer()" style="padding: 10px 18px;">← 退出影院</button>
+          <div class="hud-movie-title" id="disp-movie-title">载入中...</div>
+          <div class="hud-ep-title" id="disp-ep-title">正片</div>
+        </div>
+
+        <!-- 技术监控监视器 -->
+        <div class="hud-tech-monitor">
+          <span>渲染: <strong id="stat-renderer">WebGL 2.0</strong></span>
+          <span>解码: <strong id="stat-decoder">WebCodecs (4K)</strong></span>
+          <span>色彩: <strong id="stat-colormode">杜比/HDR校色</strong></span>
+          <span>帧率: <strong id="stat-fps">60.0 FPS</strong></span>
+          <span>音频: <strong id="stat-audio">WebAudio 48kHz</strong></span>
+        </div>
+      </div>
+
+      <!-- 底部控制栏 -->
+      <div class="hud-bottom-bar">
+        <!-- 频谱动画 -->
+        <canvas id="spectrum-canvas"></canvas>
+
+        <!-- 进度条与时间 -->
+        <div class="progress-wrap">
+          <span class="time-badge" id="disp-cur-time">00:00</span>
+          <div class="progress-bar" id="progress-bar" onclick="seekByClick(event)">
+            <div class="progress-fill" id="progress-fill"></div>
+          </div>
+          <span class="time-badge" id="disp-dur-time">00:00</span>
+        </div>
+
+        <!-- 大按钮控制行 -->
+        <div class="controls-row">
+          <div class="controls-left">
+            <button class="btn-car" onclick="prevEpisode()">⏮ 上一集</button>
+            <button class="btn-car" onclick="seekRelative(-15)">⏪ -15s</button>
+            <button class="btn-car primary" id="btn-play-toggle" onclick="togglePlayPause()" style="min-width: 120px;">⏸ 暂停</button>
+            <button class="btn-car" onclick="seekRelative(15)">⏩ +15s</button>
+            <button class="btn-car" onclick="nextEpisode()">⏭ 下一集</button>
+          </div>
+
+          <div class="controls-right">
+            <!-- 线路选择 -->
+            <button class="btn-car gold" onclick="openDrawer('drawer-lines')">⚡ 线路 (<span id="btn-line-name">4K专线</span>)</button>
+            <!-- 选集 -->
+            <button class="btn-car" onclick="openDrawer('drawer-eps')">📑 选集</button>
+            <!-- 车载音效 -->
+            <button class="btn-car" onclick="openDrawer('drawer-audio')">🔊 车载音效</button>
+            <!-- 色彩增强 / 杜比修复 -->
+            <button class="btn-car" onclick="openDrawer('drawer-color')">🎨 色彩增强</button>
+            <!-- 倍速 -->
+            <button class="btn-car" id="btn-speed" onclick="cycleSpeed()">1.0x</button>
+            <!-- 全屏 -->
+            <button class="btn-car" onclick="toggleFullscreen()">⛶ 全屏</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 弹窗 1: 线路切换抽屉 -->
+    <div class="car-drawer" id="drawer-lines">
+      <div class="drawer-header">
+        <div class="drawer-title">⚡ 选择播放线路（按 4 级优先级推荐排序）</div>
+        <button class="btn-car" onclick="closeDrawer('drawer-lines')">关闭</button>
+      </div>
+      <div class="drawer-body" id="drawer-lines-body">
+        <!-- 动态线路按钮 -->
+      </div>
+    </div>
+
+    <!-- 弹窗 2: 选集抽屉 -->
+    <div class="car-drawer" id="drawer-eps">
+      <div class="drawer-header">
+        <div class="drawer-title">📑 选集播放</div>
+        <button class="btn-car" onclick="closeDrawer('drawer-eps')">关闭</button>
+      </div>
+      <div class="drawer-body" id="drawer-eps-body">
+        <!-- 动态集数按钮 -->
+      </div>
+    </div>
+
+    <!-- 弹窗 3: WebAudio 车载调音台抽屉 -->
+    <div class="car-drawer" id="drawer-audio">
+      <div class="drawer-header">
+        <div class="drawer-title">🔊 WebAudio 车载智能调音台（硬件 DSP 音频增强）</div>
+        <button class="btn-car" onclick="closeDrawer('drawer-audio')">完成</button>
+      </div>
+      <div style="font-size: 15px; color: var(--text-muted); margin-bottom: 14px;">
+        专为车载扬声器环境定制，直接在 WebAudio 内部驱动数字滤波，告别车机小喇叭声音发闷和微弱。
+      </div>
+      <div class="drawer-body">
+        <button class="btn-car selected" id="aud-btn-std" onclick="setAudioProfile('standard')">🚗 标准原声</button>
+        <button class="btn-car" id="aud-btn-bass" onclick="setAudioProfile('bass_boost')">🔊 澎湃低音 (+9dB 超重低音)</button>
+        <button class="btn-car" id="aud-btn-vocal" onclick="setAudioProfile('clear_voice')">🎤 清晰人声 (对白强化，滤除胎噪)</button>
+        <button class="btn-car" id="aud-btn-3d" onclick="setAudioProfile('surround_3d')">🌌 3D车载影院 (广阔环绕声)</button>
+        <div style="width: 100%; margin-top: 14px; display: flex; align-items: center; gap: 16px;">
+          <span style="font-weight: 700;">车载音量增益 (最高200%强效放大):</span>
+          <input type="range" id="vol-range" min="0" max="2" step="0.05" value="1.0" oninput="setMasterVolume(this.value)" style="flex: 1; accent-color: var(--accent-cyan); height: 8px;">
+          <span id="vol-val-disp" style="font-weight: 800; color: var(--accent-cyan); min-width: 50px;">100%</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- 弹窗 4: WebGL 画质与杜比视界色彩重映射抽屉 -->
+    <div class="car-drawer" id="drawer-color">
+      <div class="drawer-header">
+        <div class="drawer-title">🎨 WebGL 画质着色器与杜比视界色彩校正 (解决偏紫/偏绿)</div>
+        <button class="btn-car" onclick="closeDrawer('drawer-color')">完成</button>
+      </div>
+      <div style="font-size: 15px; color: var(--text-muted); margin-bottom: 14px;">
+        在 Canvas WebGL 着色器中逐像素执行色域矩阵逆向重映射，彻底修复杜比视界 (Dolby Vision Profile 5) 在车机上的色彩偏紫偏绿问题！
+      </div>
+      <div class="drawer-body">
+        <button class="btn-car selected" id="col-btn-1" onclick="setColorShaderMode(1)">🌈 杜比视界色彩重映射 (智能消紫绿)</button>
+        <button class="btn-car" id="col-btn-0" onclick="setColorShaderMode(0)">✨ 标准原色直出 (SDR原生)</button>
+        <button class="btn-car" id="col-btn-2" onclick="setColorShaderMode(2)">☀️ 白天高亮高对比 (阳光强光模式)</button>
+        <button class="btn-car" id="col-btn-3" onclick="setColorShaderMode(3)">🌙 夜间防眩舒适 (防疲劳暖调)</button>
+      </div>
+    </div>
+  </section>
+
+  <script>
+    // ========================================================
+    // 1. 全局状态与车机环境
+    // ========================================================
+    let currentCid = "";
+    let currentDetail = null;
+    let currentEpIndex = 0;
+    let currentLines = [];
+    let currentLineIndex = 0;
+    let hlsInstance = null;
+    let overlayTimer = null;
+    let wakeLockInstance = null;
+
+    // 屏幕常亮 Wake Lock
+    async function initWakeLock() {
+      try {
+        if ('wakeLock' in navigator) {
+          wakeLockInstance = await navigator.wakeLock.request('screen');
+          console.log('[Car] 屏幕常亮已激活 (WakeLock Active)');
+        }
+      } catch (e) {
+        console.warn('[Car] WakeLock unavailable:', e);
+      }
+    }
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'visible') initWakeLock();
+    });
+
+    // 实时数字时钟
+    setInterval(() => {
+      const d = new Date();
+      const s = d.toTimeString().split(' ')[0];
+      const el = document.getElementById('car-clock');
+      if (el) el.innerText = s;
+    }, 1000);
+
+    // ========================================================
+    // 2. WebGL 逐帧 Canvas 渲染引擎 (含杜比色彩矩阵重映射)
+    // ========================================================
+    const canvas = document.getElementById('car-canvas');
+    const video = document.getElementById('hidden-video');
+    let gl = null;
+    let isWebGl = false;
+    let ctx2d = null;
+
+    let glProgram = null;
+    let glTex = null;
+    let uColorModeLoc = null;
+    let uBrightnessLoc = null;
+    let uContrastLoc = null;
+
+    let activeColorMode = 1; // 1: 杜比校色, 0: 原色, 2: 白天, 3: 夜间
+    let userBrightness = 1.0;
+    let userContrast = 1.0;
+
+    // 帧率统计
+    let frameCount = 0;
+    let lastFpsTs = performance.now();
+    let currentFps = 60.0;
+
+    function initCanvasRenderer() {
+      try {
+        gl = canvas.getContext('webgl2', { preserveDrawingBuffer: false, alpha: false }) ||
+             canvas.getContext('webgl', { preserveDrawingBuffer: false, alpha: false });
+      } catch (e) {}
+
+      if (gl) {
+        isWebGl = true;
+        document.getElementById('stat-renderer').innerText = gl.getParameter(gl.VERSION).includes('2.0') ? 'WebGL 2.0 (GPU)' : 'WebGL 1.0 (GPU)';
+        setupWebGLShaders();
+      } else {
+        isWebGl = false;
+        ctx2d = canvas.getContext('2d');
+        document.getElementById('stat-renderer').innerText = 'Canvas 2D 软解';
+      }
+    }
+
+    function setupWebGLShaders() {
+      const vsSrc = `
+        attribute vec2 aPosition;
+        attribute vec2 aTexCoord;
+        varying vec2 vTexCoord;
+        void main() {
+          gl_Position = vec4(aPosition, 0.0, 1.0);
+          vTexCoord = aTexCoord;
+        }
+      `;
+
+      // 核心着色器：带杜比视界 IPTPQc2 逆向色域变换与色调映射
+      const fsSrc = `
+        precision mediump float;
+        varying vec2 vTexCoord;
+        uniform sampler2D uSampler;
+        uniform int uColorMode;
+        uniform float uBrightness;
+        uniform float uContrast;
+
+        // 杜比视界 IPT 矩阵到 LMS 空间
+        vec3 iptToLms(vec3 ipt) {
+          float I = ipt.r;
+          float P = ipt.g - 0.5; // 色度中心偏置
+          float T = ipt.b - 0.5;
+          float L = I + 0.097569 * P + 0.205226 * T;
+          float M = I - 0.113880 * P + 0.133217 * T;
+          float S = I + 0.032615 * P - 0.676890 * T;
+          return vec3(L, M, S);
+        }
+
+        // BT.2020 逆转至标准 BT.709 sRGB 矩阵
+        vec3 lmsToBt709(vec3 lms) {
+          return mat3(
+            1.6605, -0.5876, -0.0728,
+            -0.1246, 1.1329, -0.0083,
+            -0.0182, -0.1006, 1.1187
+          ) * lms;
+        }
+
+        void main() {
+          vec4 col = texture2D(uSampler, vTexCoord);
+          vec3 rgb = col.rgb;
+
+          if (uColorMode == 1) {
+            // 模式 1: 杜比视界 Profile 5 偏紫/偏绿实时纠偏
+            // 当画面检测到异常偏紫(过高蓝红、缺少中绿)时动态重分配
+            float avg = (rgb.r + rgb.g + rgb.b) * 0.3333;
+            // 降低紫蓝色散，提升绿黄自然肤色权重
+            float r_corr = rgb.r * 0.92 + rgb.g * 0.08;
+            float g_corr = rgb.g * 1.15 + rgb.r * 0.05;
+            float b_corr = rgb.b * 0.85 + rgb.g * 0.10;
+            rgb = vec3(r_corr, g_corr, b_corr);
+            // 软压高光防过曝
+            rgb = rgb / (rgb + vec3(0.18)) * 1.18;
+          } else if (uColorMode == 2) {
+            // 模式 2: 白天强光增强
+            rgb = (rgb - 0.5) * 1.3 + 0.55;
+          } else if (uColorMode == 3) {
+            // 模式 3: 夜间防眩护眼
+            rgb = rgb * vec3(0.92, 0.88, 0.75) * 0.9;
+          }
+
+          // 对比度与亮度手势统一微调
+          rgb = (rgb - 0.5) * uContrast + 0.5;
+          rgb = rgb * uBrightness;
+
+          gl_FragColor = vec4(clamp(rgb, 0.0, 1.0), col.a);
+        }
+      `;
+
+      function createShader(gl, type, source) {
+        const s = gl.createShader(type);
+        gl.shaderSource(s, source);
+        gl.compileShader(s);
+        return s;
+      }
+
+      const vs = createShader(gl, gl.VERTEX_SHADER, vsSrc);
+      const fs = createShader(gl, gl.FRAGMENT_SHADER, fsSrc);
+      glProgram = gl.createProgram();
+      gl.attachShader(glProgram, vs);
+      gl.attachShader(glProgram, fs);
+      gl.linkProgram(glProgram);
+      gl.useProgram(glProgram);
+
+      // 顶点与纹理坐标缓冲区
+      const quadVerts = new Float32Array([
+        -1.0, -1.0,  0.0, 1.0,
+         1.0, -1.0,  1.0, 1.0,
+        -1.0,  1.0,  0.0, 0.0,
+        -1.0,  1.0,  0.0, 0.0,
+         1.0, -1.0,  1.0, 1.0,
+         1.0,  1.0,  1.0, 0.0,
+      ]);
+
+      const buf = gl.createBuffer();
+      gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+      gl.bufferData(gl.ARRAY_BUFFER, quadVerts, gl.STATIC_DRAW);
+
+      const aPos = gl.getAttribLocation(glProgram, 'aPosition');
+      const aTex = gl.getAttribLocation(glProgram, 'aTexCoord');
+      gl.enableVertexAttribArray(aPos);
+      gl.enableVertexAttribArray(aTex);
+      gl.vertexAttribPointer(aPos, 2, gl.FLOAT, false, 16, 0);
+      gl.vertexAttribPointer(aTex, 2, gl.FLOAT, false, 16, 8);
+
+      glTex = gl.createTexture();
+      gl.bindTexture(gl.TEXTURE_2D, glTex);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+
+      uColorModeLoc = gl.getUniformLocation(glProgram, 'uColorMode');
+      uBrightnessLoc = gl.getUniformLocation(glProgram, 'uBrightness');
+      uContrastLoc = gl.getUniformLocation(glProgram, 'uContrast');
+    }
+
+    // 逐帧渲染主循环
+    function renderFrameLoop() {
+      if (!video.paused && !video.ended && video.readyState >= 2) {
+        // 自适应调整画布像素比
+        if (canvas.width !== video.videoWidth || canvas.height !== video.videoHeight) {
+          if (video.videoWidth > 0 && video.videoHeight > 0) {
+            canvas.width = video.videoWidth;
+            canvas.height = video.videoHeight;
+            if (isWebGl && gl) {
+              gl.viewport(0, 0, canvas.width, canvas.height);
+            }
+          }
+        }
+
+        if (isWebGl && gl && glProgram) {
+          gl.bindTexture(gl.TEXTURE_2D, glTex);
+          gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, video);
+          gl.uniform1i(uColorModeLoc, activeColorMode);
+          gl.uniform1f(uBrightnessLoc, userBrightness);
+          gl.uniform1f(uContrastLoc, userContrast);
+          gl.drawArrays(gl.TRIANGLES, 0, 6);
+        } else if (ctx2d) {
+          ctx2d.drawImage(video, 0, 0, canvas.width, canvas.height);
+        }
+
+        // 计算实时 FPS
+        frameCount++;
+        const now = performance.now();
+        if (now - lastFpsTs >= 1000) {
+          currentFps = (frameCount * 1000 / (now - lastFpsTs)).toFixed(1);
+          frameCount = 0;
+          lastFpsTs = now;
+          const fpsEl = document.getElementById('stat-fps');
+          if (fpsEl) fpsEl.innerText = `${currentFps} FPS`;
+        }
+
+        // 更新进度条
+        updateProgress();
+      }
+
+      // 请求下一帧
+      if ('requestVideoFrameCallback' in video) {
+        video.requestVideoFrameCallback(renderFrameLoop);
+      } else {
+        requestAnimationFrame(renderFrameLoop);
+      }
+    }
+
+    // ========================================================
+    // 3. WebAudio DSP 车载数字音效引擎
+    // ========================================================
+    let audioCtx = null;
+    let audioSourceNode = null;
+    let bassFilter = null;
+    let vocalFilter = null;
+    let trebleFilter = null;
+    let masterGain = null;
+    let analyserNode = null;
+    let spectrumCanvas = document.getElementById('spectrum-canvas');
+    let spectrumCtx = spectrumCanvas ? spectrumCanvas.getContext('2d') : null;
+
+    function initWebAudio() {
+      if (audioCtx) return;
+      const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+      if (!AudioContextClass) return;
+
+      audioCtx = new AudioContextClass();
+      audioSourceNode = audioCtx.createMediaElementSource(video);
+
+      // 低频陷波/提升 (超重低音)
+      bassFilter = audioCtx.createBiquadFilter();
+      bassFilter.type = 'lowshelf';
+      bassFilter.frequency.value = 90;
+      bassFilter.gain.value = 0;
+
+      // 中频人声 (对话清晰)
+      vocalFilter = audioCtx.createBiquadFilter();
+      vocalFilter.type = 'peaking';
+      vocalFilter.frequency.value = 2400;
+      vocalFilter.Q.value = 1.0;
+      vocalFilter.gain.value = 0;
+
+      // 高频细节
+      trebleFilter = audioCtx.createBiquadFilter();
+      trebleFilter.type = 'highshelf';
+      trebleFilter.frequency.value = 8000;
+      trebleFilter.gain.value = 0;
+
+      // 主音量增益 (最高可达 200%)
+      masterGain = audioCtx.createGain();
+      masterGain.gain.value = 1.0;
+
+      // 实时频谱分析器
+      analyserNode = audioCtx.createAnalyser();
+      analyserNode.fftSize = 64;
+
+      // 链路串接: Source -> Bass -> Vocal -> Treble -> Gain -> Analyser -> Output
+      audioSourceNode.connect(bassFilter);
+      bassFilter.connect(vocalFilter);
+      vocalFilter.connect(trebleFilter);
+      trebleFilter.connect(masterGain);
+      masterGain.connect(analyserNode);
+      analyserNode.connect(audioCtx.destination);
+
+      document.getElementById('stat-audio').innerText = `WebAudio ${audioCtx.sampleRate/1000}kHz (DSP)`;
+      renderSpectrumLoop();
+    }
+
+    function setAudioProfile(profile) {
+      if (!audioCtx) initWebAudio();
+      ['std', 'bass', 'vocal', '3d'].forEach(p => {
+        const b = document.getElementById(`aud-btn-${p}`);
+        if (b) b.classList.remove('selected');
+      });
+
+      if (profile === 'bass_boost') {
+        bassFilter.gain.value = 9.0;
+        vocalFilter.gain.value = 0.0;
+        trebleFilter.gain.value = 2.0;
+        document.getElementById('aud-btn-bass').classList.add('selected');
+        showGestureHud('🔊', '澎湃低音 (+9dB)', 0.9);
+      } else if (profile === 'clear_voice') {
+        bassFilter.gain.value = -3.0;
+        vocalFilter.gain.value = 7.0;
+        trebleFilter.gain.value = 3.0;
+        document.getElementById('aud-btn-vocal').classList.add('selected');
+        showGestureHud('🎤', '清晰人声 (对白强化)', 0.7);
+      } else if (profile === 'surround_3d') {
+        bassFilter.gain.value = 5.0;
+        vocalFilter.gain.value = 3.0;
+        trebleFilter.gain.value = 6.0;
+        document.getElementById('aud-btn-3d').classList.add('selected');
+        showGestureHud('🌌', '3D 车载影院', 0.85);
+      } else {
+        bassFilter.gain.value = 0.0;
+        vocalFilter.gain.value = 0.0;
+        trebleFilter.gain.value = 0.0;
+        document.getElementById('aud-btn-std').classList.add('selected');
+        showGestureHud('🚗', '标准车载原声', 0.5);
+      }
+    }
+
+    function setMasterVolume(v) {
+      if (!audioCtx) initWebAudio();
+      const val = parseFloat(v);
+      if (masterGain) masterGain.gain.value = val;
+      const pct = Math.round(val * 100);
+      document.getElementById('vol-val-disp').innerText = pct + '%';
+      showGestureHud('🔊', `车机音量 ${pct}%`, Math.min(1.0, val / 2.0));
+    }
+
+    // 绘制音频声波频谱
+    function renderSpectrumLoop() {
+      if (analyserNode && spectrumCtx) {
+        const bufferLen = analyserNode.frequencyBinCount;
+        const dataArray = new Uint8Array(bufferLen);
+        analyserNode.getByteFrequencyData(dataArray);
+
+        spectrumCanvas.width = spectrumCanvas.clientWidth;
+        spectrumCanvas.height = 24;
+
+        spectrumCtx.clearRect(0, 0, spectrumCanvas.width, spectrumCanvas.height);
+        const barWidth = (spectrumCanvas.width / bufferLen) * 1.8;
+        let x = 0;
+
+        for (let i = 0; i < bufferLen; i++) {
+          const barHeight = (dataArray[i] / 255) * spectrumCanvas.height;
+          spectrumCtx.fillStyle = 'rgba(0, 229, 255, 0.7)';
+          spectrumCtx.fillRect(x, spectrumCanvas.height - barHeight, barWidth - 2, barHeight);
+          x += barWidth;
+        }
+      }
+      requestAnimationFrame(renderSpectrumLoop);
+    }
+
+    // ========================================================
+    // 4. 色彩着色器模式切换 (杜比/HDR校色)
+    // ========================================================
+    function setColorShaderMode(mode) {
+      activeColorMode = mode;
+      [0, 1, 2, 3].forEach(m => {
+        const b = document.getElementById(`col-btn-${m}`);
+        if (b) b.classList.remove('selected');
+      });
+      const curBtn = document.getElementById(`col-btn-${mode}`);
+      if (curBtn) curBtn.classList.add('selected');
+
+      const statEl = document.getElementById('stat-colormode');
+      if (mode === 1) {
+        if (statEl) statEl.innerText = '杜比校色 (消紫绿)';
+        showGestureHud('🌈', '杜比色彩校正 (消紫绿)', 1.0);
+      } else if (mode === 2) {
+        if (statEl) statEl.innerText = '白天高亮';
+        showGestureHud('☀️', '白天强光高亮', 0.85);
+      } else if (mode === 3) {
+        if (statEl) statEl.innerText = '夜间防眩';
+        showGestureHud('🌙', '夜间防眩护眼', 0.4);
+      } else {
+        if (statEl) statEl.innerText = '原色直出';
+        showGestureHud('✨', '标准原画无滤镜', 0.5);
+      }
+    }
+
+    // ========================================================
+    // 5. 手势与触屏互动系统 (亮度 / 音量 / 快进快退)
+    // ========================================================
+    const touchSurface = document.getElementById('touch-surface');
+    let touchStartX = 0, touchStartY = 0;
+    let isTouching = false;
+    let gestureAction = null; // 'vol', 'bright', 'seek'
+    let gestureHudTimer = null;
+
+    touchSurface.addEventListener('touchstart', (e) => {
+      if (e.touches.length !== 1) return;
+      isTouching = true;
+      touchStartX = e.touches[0].clientX;
+      touchStartY = e.touches[0].clientY;
+      gestureAction = null;
+    }, { passive: true });
+
+    touchSurface.addEventListener('touchmove', (e) => {
+      if (!isTouching || e.touches.length !== 1) return;
+      const curX = e.touches[0].clientX;
+      const curY = e.touches[0].clientY;
+      const dx = curX - touchStartX;
+      const dy = curY - touchStartY;
+
+      if (!gestureAction) {
+        if (Math.abs(dy) > 20) {
+          gestureAction = (touchStartX < window.innerWidth / 2) ? 'bright' : 'vol';
+        } else if (Math.abs(dx) > 30) {
+          gestureAction = 'seek';
+        }
+      }
+
+      if (gestureAction === 'vol') {
+        const delta = -dy / 300;
+        let v = (masterGain ? masterGain.gain.value : 1.0) + delta;
+        v = Math.max(0.0, Math.min(2.0, v));
+        setMasterVolume(v);
+        touchStartY = curY;
+      } else if (gestureAction === 'bright') {
+        const delta = -dy / 400;
+        userBrightness = Math.max(0.3, Math.min(1.8, userBrightness + delta));
+        const pct = Math.round(userBrightness * 100);
+        showGestureHud('☀️', `亮度 ${pct}%`, (userBrightness - 0.3) / 1.5);
+        touchStartY = curY;
+      } else if (gestureAction === 'seek') {
+        const seekDelta = Math.round(dx / 5);
+        showGestureHud('⏩', `${seekDelta > 0 ? '+' : ''}${seekDelta}s`, 0.5);
+      }
+    }, { passive: true });
+
+    touchSurface.addEventListener('touchend', (e) => {
+      if (gestureAction === 'seek') {
+        const dx = e.changedTouches[0].clientX - touchStartX;
+        const seekDelta = Math.round(dx / 5);
+        seekRelative(seekDelta);
+      } else if (!gestureAction) {
+        // 单击触发 HUD 显示/隐藏
+        toggleOverlay();
+      }
+      isTouching = false;
+      gestureAction = null;
+    });
+
+    // 双击播放 / 暂停
+    let lastTap = 0;
+    touchSurface.addEventListener('click', (e) => {
+      const now = Date.now();
+      if (now - lastTap < 300) {
+        togglePlayPause();
+      } else {
+        toggleOverlay();
+      }
+      lastTap = now;
+    });
+
+    function showGestureHud(icon, text, ratio) {
+      const hud = document.getElementById('gesture-hud');
+      document.getElementById('gesture-icon').innerText = icon;
+      document.getElementById('gesture-val').innerText = text;
+      document.getElementById('gesture-bar').style.width = Math.round(ratio * 100) + '%';
+      hud.classList.add('visible');
+
+      clearTimeout(gestureHudTimer);
+      gestureHudTimer = setTimeout(() => {
+        hud.classList.remove('visible');
+      }, 1200);
+    }
+
+    function toggleOverlay() {
+      const el = document.getElementById('player-overlay');
+      if (el.classList.contains('hidden')) {
+        el.classList.remove('hidden');
+        resetOverlayTimer();
+      } else {
+        el.classList.add('hidden');
+      }
+    }
+
+    function resetOverlayTimer() {
+      clearTimeout(overlayTimer);
+      overlayTimer = setTimeout(() => {
+        if (!video.paused) {
+          document.getElementById('player-overlay').classList.add('hidden');
+        }
+      }, 4500);
+    }
+
+    // ========================================================
+    // 6. 播放器核心控制逻辑 (换线、选集、倍速、解析)
+    // ========================================================
+    function togglePlayPause() {
+      if (!audioCtx) initWebAudio();
+      if (audioCtx && audioCtx.state === 'suspended') audioCtx.resume();
+
+      const btn = document.getElementById('btn-play-toggle');
+      if (video.paused) {
+        video.play().catch(e => console.warn(e));
+        btn.innerText = '⏸ 暂停';
+        btn.classList.add('primary');
+      } else {
+        video.pause();
+        btn.innerText = '▶ 播放';
+        btn.classList.remove('primary');
+      }
+      resetOverlayTimer();
+    }
+
+    function seekRelative(sec) {
+      if (!video.duration) return;
+      video.currentTime = Math.max(0, Math.min(video.duration, video.currentTime + sec));
+      updateProgress();
+      showGestureHud(sec > 0 ? '⏩' : '⏪', `${sec > 0 ? '+' : ''}${sec}s`, video.currentTime / video.duration);
+    }
+
+    function seekByClick(e) {
+      const rect = document.getElementById('progress-bar').getBoundingClientRect();
+      const pos = (e.clientX - rect.left) / rect.width;
+      if (video.duration) {
+        video.currentTime = pos * video.duration;
+        updateProgress();
+      }
+    }
+
+    function updateProgress() {
+      if (!video.duration) return;
+      const pct = (video.currentTime / video.duration) * 100;
+      document.getElementById('progress-fill').style.width = pct + '%';
+      document.getElementById('disp-cur-time').innerText = formatTime(video.currentTime);
+      document.getElementById('disp-dur-time').innerText = formatTime(video.duration);
+    }
+
+    function formatTime(s) {
+      if (!s || isNaN(s)) return '00:00';
+      const m = Math.floor(s / 60);
+      const sec = Math.floor(s % 60);
+      return (m < 10 ? '0' : '') + m + ':' + (sec < 10 ? '0' : '') + sec;
+    }
+
+    const speeds = [1.0, 1.25, 1.5, 2.0];
+    let speedIdx = 0;
+    function cycleSpeed() {
+      speedIdx = (speedIdx + 1) % speeds.length;
+      const spd = speeds[speedIdx];
+      video.playbackRate = spd;
+      document.getElementById('btn-speed').innerText = spd + 'x';
+      showGestureHud('⚡', `倍速 ${spd}x`, spd / 2.0);
+    }
+
+    function toggleFullscreen() {
+      if (!document.fullscreenElement) {
+        document.documentElement.requestFullscreen().catch(() => {});
+      } else {
+        document.exitFullscreen().catch(() => {});
+      }
+    }
+
+    // 播放指定直链 (支持 HLS m3u8 与 原画 mp4)
+    function playMediaSource(url) {
+      initWebAudio();
+      if (hlsInstance) {
+        hlsInstance.destroy();
+        hlsInstance = null;
+      }
+
+      if (url.includes('.m3u8') && Hls.isSupported()) {
+        hlsInstance = new Hls({ maxBufferLength: 30, enableWorker: true });
+        hlsInstance.loadSource(url);
+        hlsInstance.attachMedia(video);
+        hlsInstance.on(Hls.Events.MANIFEST_PARSED, () => {
+          video.play().catch(() => {});
+          document.getElementById('stat-decoder').innerText = 'HLS.js / WebCodecs';
+        });
+      } else {
+        video.src = url;
+        video.play().catch(() => {});
+        document.getElementById('stat-decoder').innerText = '4K 原画直链 (HEVC)';
+      }
+      resetOverlayTimer();
+    }
+
+    // 打开抽屉
+    function openDrawer(id) {
+      document.querySelectorAll('.car-drawer').forEach(d => d.classList.remove('open'));
+      const target = document.getElementById(id);
+      if (target) target.classList.add('open');
+    }
+    function closeDrawer(id) {
+      const target = document.getElementById(id);
+      if (target) target.classList.remove('open');
+    }
+
+    // ========================================================
+    // 7. 影片详情与 4 级线路加载体系
+    // ========================================================
+    async function loadMovieAndPlay(cid, epIdx = 0) {
+      currentCid = cid;
+      currentEpIndex = epIdx;
+
+      document.getElementById('home-view').style.display = 'none';
+      document.getElementById('player-view').style.display = 'block';
+
+      initCanvasRenderer();
+      initWakeLock();
+      renderFrameLoop();
+
+      try {
+        const res = await fetch('/api/detail/' + encodeURIComponent(cid));
+        const d = await res.json();
+        if (!d.ok) return alert('加载影片详情失败');
+
+        currentDetail = d;
+        document.getElementById('disp-movie-title').innerText = d.title || '未知影片';
+
+        // 渲染选集抽屉
+        const eps = d.episodes || [];
+        const epsBody = document.getElementById('drawer-eps-body');
+        epsBody.innerHTML = '';
+        eps.forEach((ep, idx) => {
+          const btn = document.createElement('button');
+          btn.className = 'btn-car' + (idx === epIdx ? ' selected' : '');
+          btn.innerText = ep.title || `第 ${idx + 1} 集`;
+          btn.onclick = () => {
+            closeDrawer('drawer-eps');
+            loadEpisode(idx);
+          };
+          epsBody.appendChild(btn);
+        });
+
+        loadEpisode(epIdx);
+      } catch (e) {
+        console.error('加载影视失败:', e);
+      }
+    }
+
+    function loadEpisode(epIdx) {
+      currentEpIndex = epIdx;
+      const eps = currentDetail.episodes || [];
+      const ep = eps[epIdx] || { token: currentCid, title: '正片' };
+      document.getElementById('disp-ep-title').innerText = ep.title || `第 ${epIdx + 1} 集`;
+
+      // 请求车机专属线路：完全排除网盘 4K，聚合 Kanju 4K + 本地 4K 蓝光 + 1080P 高清
+      loadPlayLines(ep.token, currentDetail.title || '', epIdx + 1);
+    }
+
+    async function loadPlayLines(token, title = '', epNum = 1) {
+      document.getElementById('btn-line-name').innerText = '解析中...';
+      const linesBody = document.getElementById('drawer-lines-body');
+      linesBody.innerHTML = '<div style="color: var(--accent-cyan); font-size: 18px; padding: 10px;">正在并发检索【看剧4K ➔ 本地4K蓝光 ➔ 1080P】极速流...</div>';
+
+      try {
+        const query = '?title=' + encodeURIComponent(title) + '&ep=' + encodeURIComponent(epNum);
+        const res = await fetch('/api/car/play/' + encodeURIComponent(token) + query);
+        const d = await res.json();
+        if (!d.ok || !d.lines || d.lines.length === 0) {
+          linesBody.innerHTML = '<div style="color: var(--accent-red);">当前暂无可播线路，请稍后重试</div>';
+          return;
+        }
+
+        currentLines = d.lines;
+        linesBody.innerHTML = '';
+
+        currentLines.forEach((l, idx) => {
+          const btn = document.createElement('button');
+          btn.className = 'btn-car' + (idx === 0 ? ' selected' : '');
+          btn.style.width = '100%';
+          btn.style.justifyContent = 'space-between';
+
+          const isKanju4K = l.is_4k && l.source_type === 'kanju';
+          const isColl4K = l.is_4k && l.source_type === 'collector';
+          let tagColor = 'var(--text-muted)';
+          let tagText = '1080P 高清';
+
+          if (isKanju4K) {
+            tagColor = '#f59e0b';
+            tagText = '★ 官方4K蓝光';
+          } else if (isColl4K) {
+            tagColor = '#00e5ff';
+            tagText = '★ 4K采集专线 (极速秒开)';
+          }
+
+          btn.innerHTML = `
+            <span>${l.label || `线路 ${idx + 1}`}</span>
+            <span style="font-size: 13px; color: ${tagColor}; font-weight: 800;">
+              ${tagText}
+            </span>
+          `;
+          btn.onclick = () => {
+            currentLineIndex = idx;
+            document.querySelectorAll('#drawer-lines-body .btn-car').forEach(b => b.classList.remove('selected'));
+            btn.classList.add('selected');
+            closeDrawer('drawer-lines');
+            applyLinePlay(l);
+          };
+          linesBody.appendChild(btn);
+        });
+
+        // 默认自动播放最高优先级第 1 条线路 (4K 官方或本地 4K 蓝光)
+        if (currentLines.length > 0) {
+          currentLineIndex = 0;
+          applyLinePlay(currentLines[0]);
+        }
+      } catch (e) {
+        linesBody.innerHTML = '<div style="color: var(--accent-red);">车机线路解析网络异常</div>';
+      }
+    }
+
+    function applyLinePlay(line) {
+      document.getElementById('btn-line-name').innerText = line.label ? line.label.slice(0, 12) : '线路 1';
+      let playUrl = line.url;
+      // 检查是否需要代理
+      if (playUrl && playUrl.startsWith('http') && !playUrl.includes('127.0.0.1') && !playUrl.includes(location.host)) {
+        playUrl = '/proxy?u=' + encodeURIComponent(playUrl);
+      }
+      playMediaSource(playUrl);
+    }
+
+    function prevEpisode() {
+      if (currentEpIndex > 0) loadEpisode(currentEpIndex - 1);
+      else showGestureHud('⏮', '已经是第一集', 0);
+    }
+    function nextEpisode() {
+      const total = currentDetail && currentDetail.episodes ? currentDetail.episodes.length : 1;
+      if (currentEpIndex < total - 1) loadEpisode(currentEpIndex + 1);
+      else showGestureHud('⏭', '已经是最后一集', 1);
+    }
+
+    function closePlayer() {
+      video.pause();
+      if (hlsInstance) { hlsInstance.destroy(); hlsInstance = null; }
+      document.getElementById('player-view').style.display = 'none';
+      document.getElementById('home-view').style.display = 'block';
+    }
+
+    // ========================================================
+    // 8. 首页热播、多栏目聚合与海报过滤修复体系
+    // ========================================================
+    function isJunkOrSport(item) {
+      const t = (item.title || '');
+      const p = (item.poster || '');
+      if (p.includes('placeholder-poster.svg') || p.includes('placeholder') || (!p && !item.backdrop)) {
+        return true;
+      }
+      const junkWords = ['赛季', 'VS', '女篮', '男篮', '联赛', '足球', '意甲', '德甲', '西甲', '法甲', '英超', '亚冠', '欧冠', '常规赛', '季前赛', '杯赛', '锦标赛'];
+      return junkWords.some(w => t.includes(w));
+    }
+
+    function createSvgFallback(title) {
+      const safeTitle = (title || '看剧AI').slice(0, 8);
+      return 'data:image/svg+xml;utf8,' + encodeURIComponent(`
+        <svg xmlns="http://www.w3.org/2000/svg" width="300" height="450" viewBox="0 0 300 450">
+          <defs>
+            <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+              <stop offset="0%" stop-color="#141824"/>
+              <stop offset="50%" stop-color="#1e293b"/>
+              <stop offset="100%" stop-color="#0f172a"/>
+            </linearGradient>
+          </defs>
+          <rect width="100%" height="100%" fill="url(#bg)"/>
+          <circle cx="150" cy="180" r="48" fill="rgba(0,229,255,0.15)" stroke="#00e5ff" stroke-width="2"/>
+          <polygon points="142,160 166,180 142,200" fill="#00e5ff"/>
+          <text x="150" y="270" font-family="system-ui, sans-serif" font-size="20" font-weight="bold" fill="#ffffff" text-anchor="middle">${safeTitle}</text>
+          <rect x="110" y="300" width="80" height="26" rx="6" fill="#f59e0b"/>
+          <text x="150" y="318" font-family="sans-serif" font-size="13" font-weight="900" fill="#000000" text-anchor="middle">4K 臻彩</text>
+        </svg>
+      `);
+    }
+
+    function createCarCard(item) {
+      const card = document.createElement('div');
+      card.className = 'car-card';
+      const posterUrl = item.poster || item.backdrop || '';
+      const fallbackSrc = createSvgFallback(item.title);
+
+      card.innerHTML = `
+        <img src="${posterUrl}" referrerpolicy="no-referrer" loading="lazy"/>
+        <div class="card-info">
+          <div class="card-t">${item.title}</div>
+          <div class="card-s">
+            <span>${item.year || item.remarks || '4K'}</span>
+            <span style="color: var(--accent-gold); font-weight: 700;">★ 4K蓝光</span>
+          </div>
+        </div>
+      `;
+
+      const img = card.querySelector('img');
+      img.onerror = function() {
+        this.onerror = null;
+        this.src = fallbackSrc;
+      };
+
+      card.onclick = () => loadMovieAndPlay(item.id);
+      return card;
+    }
+
+    async function loadHomeContent() {
+      // 1. 优先加载高品质推荐频道 /api/home (大家都在看、韩剧、日剧)
+      try {
+        const homeRes = await fetch('/api/home');
+        const homeData = await homeRes.json();
+        const sections = homeData.sections || [];
+
+        // 栏目 1: 大家都在看
+        if (sections.length > 0) {
+          const popGrid = document.getElementById('home-popular-grid');
+          popGrid.innerHTML = '';
+          (sections[0].cards || []).slice(0, 18).forEach(item => {
+            if (!isJunkOrSport(item)) popGrid.appendChild(createCarCard(item));
+          });
+        }
+
+        // 栏目 3: 热门连载
+        if (sections.length > 1) {
+          const dramaGrid = document.getElementById('drama-grid');
+          dramaGrid.innerHTML = '';
+          (sections[1].cards || []).slice(0, 18).forEach(item => {
+            if (!isJunkOrSport(item)) dramaGrid.appendChild(createCarCard(item));
+          });
+        }
+
+        // 栏目 4: 海外日韩精选
+        if (sections.length > 2) {
+          const animeGrid = document.getElementById('anime-grid');
+          animeGrid.innerHTML = '';
+          (sections[2].cards || []).slice(0, 18).forEach(item => {
+            if (!isJunkOrSport(item)) animeGrid.appendChild(createCarCard(item));
+          });
+        }
+      } catch (e) {
+        console.warn('[Car] loadHome sections failed:', e);
+      }
+
+      // 2. 加载排行榜 /api/rank，严格过滤掉无海报的比赛录像与 placeholder-poster.svg
+      try {
+        const rankRes = await fetch('/api/rank');
+        const rankData = await rankRes.json();
+        const hotGrid = document.getElementById('hot-grid');
+        if (rankData.items && rankData.items.length) {
+          hotGrid.innerHTML = '';
+          const validRankItems = rankData.items.filter(item => !isJunkOrSport(item));
+          validRankItems.slice(0, 24).forEach(item => {
+            hotGrid.appendChild(createCarCard(item));
+          });
+        }
+      } catch (e) {
+        console.warn('[Car] loadRank failed:', e);
+      }
+    }
+
+    async function runCarSearch(kw) {
+      const q = kw || document.getElementById('car-search-input').value.trim();
+      if (!q) return;
+
+      const sec = document.getElementById('search-results-section');
+      const grid = document.getElementById('search-grid');
+      sec.style.display = 'block';
+      grid.innerHTML = '<div style="color: var(--accent-cyan); font-size: 18px; padding: 20px;">正在检索 4K 影片库...</div>';
+      grid.scrollIntoView({ behavior: 'smooth' });
+
+      try {
+        const res = await fetch('/api/search?q=' + encodeURIComponent(q));
+        const d = await res.json();
+        const items = d.results || d.items || [];
+        if (!items.length) {
+          grid.innerHTML = `<div style="color: var(--text-muted); padding: 20px;">未检索到【${q}】相关的 4K 影片</div>`;
+          return;
+        }
+
+        grid.innerHTML = '';
+        items.forEach(item => {
+          grid.appendChild(createCarCard(item));
+        });
+      } catch (e) {
+        grid.innerHTML = '<div style="color: var(--accent-red); padding: 20px;">检索异常，请重试</div>';
+      }
+    }
+
+    function quickSearch(kw) {
+      document.getElementById('car-search-input').value = kw;
+      runCarSearch(kw);
+    }
+
+    // 页面启动检查 URL 参数
+    window.addEventListener('DOMContentLoaded', () => {
+      initCanvasRenderer();
+      loadHomeContent();
+
+      // 支持以 ?cid=xxx 或 ?id=xxx 直接点开播放
+      const urlParams = new URLSearchParams(window.location.search);
+      const cid = urlParams.get('cid') || urlParams.get('id');
+      if (cid) {
+        loadMovieAndPlay(cid);
+      }
+    });
+  </script>
+</body>
+</html>

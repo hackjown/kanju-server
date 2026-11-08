@@ -1,0 +1,1 @@
+const i="movie-search-library-sync-accepted";function o(c,r,s,t){const n=a=>{const e=a.detail;(e==null?void 0:e.accountScope)===r&&Array.isArray(e.families)&&e.families.includes(s)&&t()};return c.addEventListener(i,n),()=>c.removeEventListener(i,n)}function y(c,r,s){return o(c,r,"history",s)}export{y as a,i as l,o as s};

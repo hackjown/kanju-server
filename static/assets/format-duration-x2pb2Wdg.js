@@ -1,0 +1,1 @@
+function o(n){if(!Number.isFinite(n)||n<0)return"";const r=Math.round(n);if(r<60)return`${r} 秒`;const t=Math.floor(r/60);return t<60?`${t} 分${r%60?` ${r%60} 秒`:""}`:`${Math.floor(t/60)} 小时${t%60?` ${t%60} 分`:""}`}export{o as f};

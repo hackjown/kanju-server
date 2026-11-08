@@ -1,0 +1,1 @@
+import{k as t,o as i}from"./movie-card-runtime-z-PWzGSL.js";function _(r,n){if(!r.trim())return"请输入片单名称";if(r.trim().length>t)return`片单名称不能超过 ${t} 个字符`;if(n.trim().length>i)return`片单说明不能超过 ${i} 个字符`}export{_ as p};

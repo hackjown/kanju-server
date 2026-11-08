@@ -1,0 +1,1 @@
+import{j as o}from"./react-vendor-P5XnYvWb.js";import{A as s}from"./main-3H4ZSkip.js";function i({title:r,backHref:t="/",backLabel:e="返回搜索"}){return o.jsx(s,{title:r,backHref:t,backLabel:e})}export{i as P};

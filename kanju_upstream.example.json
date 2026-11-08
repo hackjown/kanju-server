@@ -1,0 +1,6 @@
+{
+  "_说明": "把这个文件改名为 kanju_upstream.json 并填入运营者自己的 kanju 账号会话，午夜剧场即切换为原站专属池。cookie 与 authorization 二选一或都填；base 可省略（自动选可用域名）。此文件只放服务器本地，不要提交代码仓库、不要发到聊天里。",
+  "cookie": "",
+  "authorization": "",
+  "base": "https://kanju26.com"
+}

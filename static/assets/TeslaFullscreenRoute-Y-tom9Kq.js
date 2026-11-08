@@ -1,0 +1,1 @@
+import{j as r}from"./react-vendor-P5XnYvWb.js";import{TeslaFullscreenPrompt as o}from"./TeslaFullscreenPrompt-eaILDm9h.js";import"./assistant-ui-primitives-DalFKjZn.js";import"./radix-ui-BE1Q6vTN.js";import"./icons-B6cJTgMu.js";import"./navigation-runtime-Dw-8DVQD.js";function u(){return r.jsx(o,{mode:"route"})}export{u as TeslaFullscreenRoute};

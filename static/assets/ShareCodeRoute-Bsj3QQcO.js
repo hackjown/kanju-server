@@ -1,0 +1,1 @@
+import{j as e}from"./react-vendor-P5XnYvWb.js";import{N as r}from"./navigation-runtime-Dw-8DVQD.js";function a(){return e.jsx(r,{to:"/playlists/explore?share_dialog=1",replace:!0})}export{a as ShareCodeRoute};

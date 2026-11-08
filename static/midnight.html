@@ -1,0 +1,342 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>午夜剧场 · 18+ | 看剧AI - KANJU.AI</title>
+<script src="/static/hls.min.js"></script>
+<style>
+  :root{--bg:#0b0a12;--card:#15122298;--gold:#e8b44a;--txt:#e9e6f2;--dim:#8f8aa6;--red:#e2504a}
+  *{box-sizing:border-box}
+  body{margin:0;background:radial-gradient(1200px 600px at 50% -10%,#2a1240 0%,#0b0a12 60%);color:var(--txt);
+       font-family:-apple-system,"PingFang SC","Microsoft YaHei",sans-serif;min-height:100vh}
+  header{display:flex;align-items:center;gap:12px;padding:14px 20px;border-bottom:1px solid #ffffff14;position:sticky;top:0;
+         background:#0b0a12dd;backdrop-filter:blur(8px);z-index:9}
+  header h1{font-size:18px;margin:0;letter-spacing:2px}
+  header .badge{font-size:12px;background:var(--red);color:#fff;border-radius:4px;padding:2px 6px;font-weight:700}
+  header .sp{flex:1}
+  header a.btn,button.btn{cursor:pointer;border:1px solid #ffffff26;background:#ffffff10;color:var(--txt);border-radius:8px;
+        padding:8px 14px;font-size:14px;text-decoration:none}
+  button.btn.gold{background:var(--gold);color:#201700;border-color:var(--gold);font-weight:700}
+  button.btn:disabled{opacity:.5;cursor:default}
+  .wrap{max-width:1080px;margin:0 auto;padding:28px 20px 60px}
+  .gate{background:var(--card);border:1px solid #ffffff1a;border-radius:16px;padding:28px;text-align:center;max-width:640px;margin:40px auto}
+  .gate h2{margin:0 0 10px;font-size:20px}
+  .gate p{color:var(--dim);font-size:14px;line-height:1.7;margin:8px 0 18px;text-align:left}
+  .gate .row{display:flex;gap:10px;justify-content:center;flex-wrap:wrap}
+  code{background:#ffffff12;border-radius:6px;padding:1px 6px;font-size:12.5px}
+  pre{background:#00000055;border:1px solid #ffffff1a;border-radius:10px;padding:12px;text-align:left;overflow:auto;font-size:12.5px}
+  .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:16px;margin-top:14px}
+  .card{background:var(--card);border:1px solid #ffffff14;border-radius:12px;overflow:hidden;cursor:pointer}
+  .card .ph{width:100%;aspect-ratio:2/3;background:#221a33 center/cover no-repeat;display:flex;align-items:center;justify-content:center;color:#5b5375;font-size:12px}
+  .card .ti{padding:8px 10px 2px;font-size:13px;line-height:1.4;max-height:44px;overflow:hidden}
+  .card .su{padding:0 10px 9px;font-size:11.5px;color:var(--dim);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .msg{color:var(--dim);font-size:14px;margin:16px 0}
+  .err{color:#ff8a83}
+  h3.sec{font-size:16px;margin:26px 0 4px}
+  .bar{display:flex;gap:10px;flex-wrap:wrap;margin:18px 0}
+  input,textarea{background:#ffffff0d;border:1px solid #ffffff26;color:var(--txt);border-radius:8px;padding:10px 12px;font-size:14px;width:100%}
+  video{width:100%;max-height:70vh;background:#000;border-radius:12px;margin-top:14px}
+  #mvLines{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px}
+  #mvLines .mln{cursor:pointer;border:1px solid #ffffff2b;background:#ffffff10;color:var(--txt);border-radius:999px;padding:6px 13px;font-size:12.5px}
+  #mvLines .mln.on{border-color:var(--gold);color:var(--gold)}
+  #mvLines .mln .st{color:var(--dim);margin-left:5px;font-size:11px}
+</style>
+</head>
+<body>
+<header>
+  <h1>🌙 午夜剧场</h1><span class="badge">18+</span><span class="sp"></span>
+  <span id="who" style="font-size:13px;color:#8f8aa6"></span>
+  <a class="btn" href="/">返回首页</a>
+</header>
+
+<div class="wrap">
+  <div class="gate" id="gate">
+    <h2 id="gateTitle">正在校验进入权限…</h2>
+    <p id="gateDesc">午夜剧场仅对已登录并确认年满 18 周岁的用户开放。</p>
+    <div class="row" id="gateActions"></div>
+    <div class="msg err" id="gateErr"></div>
+  </div>
+
+  <div id="listBox" style="display:none">
+    <div class="bar">
+      <button class="btn gold" id="btnTop">▶ 精选播放</button>
+      <button class="btn" id="btnRandom">🔀 随机播放</button>
+      <button class="btn" id="btnMore">加载更多</button>
+    </div>
+    <div style="display:flex;gap:10px;flex-wrap:wrap">
+      <input id="genPrompt" placeholder="生成专属午夜片单：输入想要的氛围/题材，如「雨夜、都市、暧昧」" style="flex:1;min-width:260px"/>
+      <button class="btn gold" id="btnGen">✨ 生成片单</button>
+    </div>
+    <div class="msg" id="genMsg"></div>
+    <video id="mv" controls playsinline style="display:none"></video>
+    <div id="mvLines"></div>
+    <div class="msg" id="listMsg">加载中…</div>
+    <div id="sections"></div>
+  </div>
+</div>
+
+<script>
+var $=function(id){return document.getElementById(id);};
+function E(t,c,h){var e=document.createElement(t);if(c)e.className=c;if(h!=null)e.innerHTML=h;return e;}
+function X(s){return String(s==null?'':s).replace(/[<>&"]/g,function(m){return {'<':'&lt;','>':'&gt;','&':'&amp;','"':'&quot;'}[m];});}
+function req(u,o){o=o||{};o.headers=o.headers||{};o.credentials='same-origin';if(o.body&&typeof o.body!=='string'){o.headers['Content-Type']='application/json';o.body=JSON.stringify(o.body);}return fetch('/api'+u,o).then(function(r){return r.json().catch(function(){return{};});});}
+var cursors={history:null,watching:null}, HLS=null;
+function upErr(d){
+  var r=(d&&d.result)||{};
+  var e=r.error||{};
+  var m=(typeof e==='string')?e:(e.message||r.message||r.code||e.code||'');
+  return m?('：'+m):'';
+}
+function uuid(){ if(crypto&&crypto.randomUUID) return crypto.randomUUID(); return 'xxxxxxxxxxxx4xxxyxxxxxxxxxxxxxxx'.replace(/[xy]/g,function(c){var r=Math.random()*16|0;return (c=='x'?r:(r&0x3|0x8)).toString(16);}); }
+function persistId(k){ try{ var v=localStorage.getItem(k); if(!v){ v=uuid(); localStorage.setItem(k,v); } return v; }catch(e){ return uuid(); } }
+
+function gateErr(m){ $('gateErr').textContent=m||''; }
+function showGate(title,desc,actions){
+  $('gate').style.display='block'; $('listBox').style.display='none';
+  $('gateTitle').textContent=title; $('gateDesc').innerHTML=desc;
+  var box=$('gateActions'); box.innerHTML='';
+  (actions||[]).forEach(function(a){ var b=E('button','btn'+(a.gold?' gold':''),a.label); b.onclick=a.fn; box.appendChild(b); });
+}
+function posterOf(it){ return it.poster_url||it.poster||it.cover_url||it.cover||it.image_url||it.image||it.media_url||it.backdrop_url||it.backdrop||''; }
+function imgUrl(p){ if(!p) return ''; if(p.charAt(0)==='/') return p; return '/img?u='+encodeURIComponent(p); }
+function titleOf(it){ return it.title||it.name||it.display_name||it.label||'未命名'; }
+function subOf(it){ return it.remarks||it.progress||it.episode_progress_text||it.subtitle||it.genre||''; }
+
+function cardOf(it){
+  var d=E('div','card');
+  var p=posterOf(it);
+  d.innerHTML='<div class="ph" '+(p?('style="background-image:url(\''+X(imgUrl(p))+'\')"'):'')+'>'+(p?'':'暂无封面')+'</div><div class="ti">'+X(titleOf(it))+'</div><div class="su">'+X(subOf(it))+'</div>';
+  d.onclick=function(){ onItem(it); };
+  return d;
+}
+function onItem(it){
+  if(it.target_url){ window.open(it.target_url,'_blank'); return; }
+  var pid=it.playlist_id||it.playlistId||(it.object&&String(it.object).indexOf('playlist')>-1?it.id:null);
+  if(pid){ playPlaylist(pid); return; }
+  playCatalogItem(it);
+}
+/* 目录条目页内播放：详情→剧集 token→线路→午夜页内播放器（与原站一致，不跳主页） */
+function playCatalogItem(it){
+  var title=titleOf(it);
+  var tok=it.episode_token||it.playback_token||it.token||'';
+  if(tok&&String(tok).indexOf('av_')===0){ loadMnPlay(tok,title); return; }
+  if(!it.id){ $('listMsg').textContent='《'+title+'》暂无可播放标识'; return; }
+  $('listMsg').textContent='正在解析《'+title+'》…';
+  req('/detail/'+encodeURIComponent(it.id)).then(function(d){
+    var eps=(d.detail&&d.detail.episodes)||d.episodes||[];
+    if(!eps.length){ $('listMsg').textContent='《'+title+'》没有可播放剧集'; return; }
+    loadMnPlay(eps[0].token,title);
+  }).catch(function(){ $('listMsg').textContent='《'+title+'》解析失败'; });
+}
+function mnProx(u){ if(!u||u.charAt(0)==='/') return u; try{ return '/proxy?u='+encodeURIComponent(u)+'&ref='+encodeURIComponent((new URL(u)).origin+'/'); }catch(e){ return u; } }
+var mnSmart={url:'',mode:'direct'};
+function playMnUrl(u){
+  var v=$('mv'); v.style.display='block';
+  mnSmart.url=u;
+  if(HLS){ try{HLS.destroy();}catch(e){} HLS=null; }
+  if(window.Hls&&Hls.isSupported()&&/\.m3u8/.test(u)){
+    HLS=new Hls();
+    HLS.on(Hls.Events.ERROR,function(e,data){
+      if(data&&data.fatal){
+        if(mnSmart.mode==='direct'){ mnSmart.mode='proxy'; playMnUrlReal(mnProx(mnSmart.url)); }
+        else { $('listMsg').textContent='该线路播放失败（'+((data.response&&data.response.code)||data.details||data.type||'')+'），请换一条'; }
+      }
+    });
+    playMnUrlReal(u);
+  } else { v.src=u; v.play().catch(function(){}); }
+  v.scrollIntoView({behavior:'smooth'});
+}
+function playMnUrlReal(u){
+  var v=$('mv');
+  if(HLS){ HLS.loadSource(u); HLS.attachMedia(v); HLS.on(Hls.Events.MANIFEST_PARSED,function(){ v.play().catch(function(){}); }); }
+}
+function loadMnPlay(token,title){
+  req('/play/'+encodeURIComponent(token)).then(function(d){
+    var lines=d.lines||[];
+    var box=$('mvLines'); box.innerHTML='';
+    if(!lines.length){ $('listMsg').textContent='《'+title+'》暂无线路'; return; }
+    $('listMsg').textContent='《'+title+'》选择线路播放（共 '+lines.length+' 条）';
+    lines.forEach(function(x,i){
+      var b=E('button','mln');
+      b.innerHTML=X((x.is4k?'4K ':'')+(x.label||('线路'+(i+1))))+'<span class="st"></span>';
+      b.onclick=function(){
+        box.querySelectorAll('.mln').forEach(function(z){z.classList.remove('on');});
+        b.classList.add('on');
+        mnSmart.mode='direct';
+        if(x.kind==='resolve'){
+          b.querySelector('.st').textContent='解析中…（最长约75秒）';
+          fetch('/api/resolve_line?wait=75&token='+encodeURIComponent(token)+'&sid='+encodeURIComponent(x.sid||'')).then(function(r){return r.json();}).then(function(rd){
+            if(rd.ok&&rd.url){ x.kind=rd.kind||'hls'; x.url=rd.url; b.querySelector('.st').textContent=''; playMnUrl(x.url); }
+            else { b.querySelector('.st').textContent='解析失败'; $('listMsg').textContent='该线路解析失败：'+(rd.error||''); }
+          });
+        } else if(x.url){ playMnUrl(x.url); }
+      };
+      box.appendChild(b);
+    });
+    var fi=lines.findIndex(function(x){return x.is4k;});
+    if(fi<0) fi=lines.findIndex(function(x){return x.kind==='hls'||x.kind==='mp4';});
+    if(fi>=0&&box.children[fi]) box.children[fi].click();
+  });
+}
+/* 通用渲染：把 discovery 结果里的数组分区都画出来 */
+function renderDiscovery(res,append){
+  var box=$('sections');
+  if(!append) box.innerHTML='';
+  if(!res||typeof res!=='object'){ $('listMsg').textContent='片池暂无数据'; return; }
+  var names={showcase:'🏅 官方靠谱推荐',history:'🕘 历史足迹',watching:'▶ 继续观看',continue_watching:'▶ 继续观看',featured:'🌟 精选',top:'🌟 精选',recommended:'✨ 推荐',discovery:'✨ 发现',playlists:'🎞 午夜片单',items:'片单'};
+  var found=0;
+  Object.keys(res).forEach(function(k){
+    var v=res[k];
+    if(Array.isArray(v)&&v.length&&typeof v[0]==='object'){
+      var sec=E('div'); sec.appendChild(E('h3','sec',names[k]||k));
+      var g=E('div','grid'); v.forEach(function(it){ if(it&&typeof it==='object'){ g.appendChild(cardOf(it)); found++; } });
+      sec.appendChild(g); box.appendChild(sec);
+    }
+  });
+  if(res.history_cursor) cursors.history=res.history_cursor;
+  if(res.watching_cursor) cursors.watching=res.watching_cursor;
+  if(res.next_history_cursor) cursors.history=res.next_history_cursor;
+  if(res.next_watching_cursor) cursors.watching=res.next_watching_cursor;
+  $('listMsg').textContent=found?('共 '+found+' 条（上游午夜专属池）'):'片池暂无数据';
+  return found;
+}
+function loadDiscovery(append){
+  var qs='history_limit=12&watching_limit=12';
+  if(append){ if(cursors.history) qs+='&history_cursor='+encodeURIComponent(cursors.history); if(cursors.watching) qs+='&watching_cursor='+encodeURIComponent(cursors.watching); }
+  return req('/mn/discovery?'+qs).then(function(d){
+    if(!d.ok){ $('listMsg').innerHTML='片池加载失败（上游 '+X(d.upstream_status||'')+X(upErr(d))+'）'; return; }
+    renderDiscovery(d.result,append);
+  });
+}
+function playResult(d,label){
+  if(!d.ok){ $('listMsg').textContent=label+'失败（上游 '+ (d.upstream_status||'') + upErr(d) +'）'; return; }
+  var res=d.result||{};
+  var url=res.url||res.play_url||res.stream_url||(res.playback&&res.playback.url);
+  var items=res.items||res.playlist_items||(res.playlist&&res.playlist.items);
+  if(url){ mnSmart.mode='direct'; playMnUrl(url); $('listMsg').textContent=label+'：播放中'; return; }
+  if(items&&items.length){ $('sections').innerHTML=''; renderDiscovery({items:items}); $('listMsg').textContent=label+'：已生成片单，点封面播放'; return; }
+  renderDiscovery(res);
+}
+function playUrl(u){
+  var v=$('mv'); v.style.display='block';
+  if(HLS){ HLS.destroy(); HLS=null; }
+  if(window.Hls&&Hls.isSupported()&&/\.m3u8/.test(u)){ HLS=new Hls(); HLS.loadSource(u); HLS.attachMedia(v); HLS.on(Hls.Events.MANIFEST_PARSED,function(){ v.play().catch(function(){}); }); }
+  else { v.src=u; v.play().catch(function(){}); }
+  v.scrollIntoView({behavior:'smooth'});
+}
+function playPlaylist(pid){
+  req('/mn/play/playlist',{method:'POST',body:{playlist_id:pid}}).then(function(d){ playResult(d,'播放片单'); });
+}
+
+function enter(){
+  $('gate').style.display='none'; $('listBox').style.display='block';
+  loadDiscovery(false);
+}
+function checkFlow(){
+  req('/midnight/state').then(function(s){
+    if(!s.logged_in){
+      showGate('请先登录','午夜剧场与原站一致：必须登录账号后才能进入。',[
+        {label:'去登录',gold:true,fn:function(){ location.href='/'; }}]);
+      return;
+    }
+    $('who').textContent=(s.user&&(s.user.nickname||s.user.account))||'';
+    if(!s.user||!s.user.adult_confirmed&&s.state!=='unlocked'){
+      showGate('请确认您已满 18 岁','点击下方按钮即声明您已年满 18 周岁。确认会同步写入原站账号偏好（与原站同一动作）。',[
+        {label:'我已满 18 岁，进入',gold:true,fn:function(){
+          req('/mn/adult',{method:'POST',body:{}}).then(function(){ checkFlow(); });
+        }},
+        {label:'未满 18，返回',fn:function(){ location.href='/'; }}]);
+      return;
+    }
+    req('/mn/status').then(function(st){
+      if(!st.upstream_bound){
+        showGate('差最后一步：绑定运营者原站账号',
+          '原站午夜池是<b>账号专属</b>的（资格、片池、生成都绑在原站账号上，匿名会话会被上游 401 拒绝，这一点已实测）。'+
+          '要让片池完全对上，需要站长把自己的 kanju 账号会话放到服务器应用目录的 <code>kanju_upstream.json</code>：<br>'+
+          '<pre>{\n  "cookie": "（从自己浏览器登录 kanju45.com 后复制的 Cookie）",\n  "base": "https://kanju26.com"\n}</pre>'+
+          '放好后刷新本页即可，文件只存服务器本地、不经过聊天。在此之前可以先看本地聚合版（片目与原站专属池不完全一致）。',
+          [{label:'先看本地聚合版',gold:true,fn:function(){
+              $('gate').style.display='none'; $('listBox').style.display='block';
+              req('/midnight/feed').then(function(d){ renderDiscovery({items:d.items||[]}); });
+            }},
+           {label:'已放好，刷新',fn:function(){ location.reload(); }}]);
+        return;
+      }
+      /* 已绑定：走原站 access / eligibility 状态机 */
+      Promise.all([req('/mn/access'),req('/mn/eligibility')]).then(function(rs){
+        var acc=(rs[0].result||{}), eli=(rs[1].result||{});
+        if(rs[0].upstream_status===401||rs[1].upstream_status===401){
+          showGate('原站会话已失效','绑定的原站账号会话过期了，请站长更新 kanju_upstream.json 后刷新。',[
+            {label:'刷新重试',gold:true,fn:function(){ location.reload(); }}]);
+          return;
+        }
+        var astate=acc.access_state||'';
+        if(astate==='adult_confirmation_required'||eli.requires_adult_confirmation){
+          showGate('请确认您已满 18 岁','原站账号尚未完成成年确认，确认会同步写入原站账号偏好（与原站同一动作）。',[
+            {label:'我已满 18 岁，进入',gold:true,fn:function(){
+              req('/mn/adult',{method:'POST',body:{}}).then(function(d){
+                if(d.upstream_status&&d.upstream_status>=400){ gateErr('原站确认失败（'+d.upstream_status+upErr(d)+'）'); return; }
+                checkFlow();
+              });
+            }},
+            {label:'未满 18，返回',fn:function(){ location.href='/'; }}]);
+          return;
+        }
+        var pending=acc.announcement_pending||astate==='announcement_pending'||eli.announcement_pending||eli.requires_announcement_acknowledgement||(acc.feature_access&&acc.feature_access.midnight_theater&&acc.feature_access.midnight_theater.announcement_pending);
+        if(pending){
+          showGate('请先确认午夜剧场公告','原站要求先确认公告后才能进入（与原站同一流程）。',[
+            {label:'确认公告并进入',gold:true,fn:function(){
+              req('/mn/acknowledge',{method:'POST',body:{}}).then(function(d){
+                if(d.upstream_status&&d.upstream_status>=400){ gateErr('确认失败（'+d.upstream_status+upErr(d)+'）'); return; }
+                enter();
+              });
+            }}]);
+          return;
+        }
+        if(astate==='blocked'||astate==='revoked'||astate==='cooldown'||astate==='locked'){
+          showGate('原站账号暂不可进入午夜剧场','原站返回状态：'+astate+upErr(rs[0])+'。这属于原站账号侧限制，复刻站无法绕过。',[
+            {label:'刷新重试',gold:true,fn:function(){ location.reload(); }}]);
+          return;
+        }
+        if(eli.can_enter===false&&eli.eligible===false){
+          showGate('原站账号暂未通过午夜资格','原站资格校验未通过'+upErr(rs[1])+'（可能与账号等级/成长有关）。',[
+            {label:'刷新重试',gold:true,fn:function(){ location.reload(); }}]);
+          return;
+        }
+        enter();
+      });
+    });
+  });
+}
+$('btnTop').onclick=function(){ req('/mn/play/top',{method:'POST',body:{}}).then(function(d){ playResult(d,'精选播放'); }); };
+$('btnRandom').onclick=function(){ req('/mn/play/random',{method:'POST',body:{}}).then(function(d){ playResult(d,'随机播放'); }); };
+$('btnMore').onclick=function(){ loadDiscovery(true); };
+$('btnGen').onclick=function(){
+  var p=$('genPrompt').value.trim(); if(!p){ $('genMsg').textContent='先输入想要的氛围/题材'; return; }
+  $('genMsg').textContent='生成中（原站生成约需数十秒）…';
+  var myGid=uuid();
+  var body={mode:'prompt',text:p,matching_mode:'comprehensive',age_confirmed:true,
+            generation_id:myGid,session_id:persistId('kjMnSession'),count:50,device_id:persistId('kjMnDevice')};
+  req('/mn/generate',{method:'POST',body:body}).then(function(d){
+    if(!d.ok){ $('genMsg').textContent='生成失败（上游 '+(d.upstream_status||'')+upErr(d)+'）'; return; }
+    var res=d.result||{};
+    var gid=res.id||res.generation_id||myGid;
+    if(gid&&(res.state==='pending'||res.state==='running'||res.status==='pending')){
+      var iv=setInterval(function(){
+        req('/mn/generation/'+encodeURIComponent(gid)).then(function(g){
+          var gr=g.result||{};
+          $('genMsg').textContent='生成中… '+(gr.state||gr.status||'');
+          var gst=gr.state||gr.status||'';
+          if(gst==='completed'||gst==='succeeded'||gst==='done'||gst==='ready'||gr.playlist||gr.items){ clearInterval(iv); $('genMsg').textContent='生成完成'; renderDiscovery({items:gr.items||(gr.playlist&&gr.playlist.items)||[]}); }
+          if(gst==='failed'||gst==='error'){ clearInterval(iv); $('genMsg').textContent='生成失败'+upErr(g); }
+        });
+      },4000);
+      setTimeout(function(){ clearInterval(iv); },180000);
+    } else { $('genMsg').textContent='生成完成'; playResult(d,'生成片单'); }
+  });
+};
+checkFlow();
+</script>
+</body>
+</html>

@@ -1,0 +1,1 @@
+import{r as a,a as c}from"./guest-access-store-Hbdjrrgl.js";import{r as n}from"./movie-card-runtime-z-PWzGSL.js";const u=8e3;function p(){const t=n(),o=a(),e=c(),s=e?"unlocked":"locked";return{cacheScope:[t.accountScope??(t.signedIn?"account":"anonymous"),s,o.stateRevision,o.policyVersion??""].join(":"),...e?{headers:{"x-ai-movie-midnight-access":e}}:{}}}export{u as a,p};

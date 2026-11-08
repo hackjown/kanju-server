@@ -1,0 +1,119 @@
+<!DOCTYPE html>
+<html lang="zh-CN"><head><meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>看剧AI · 车机模式 - KANJU.AI</title>
+<script src="/static/hls.min.js"></script>
+<style>
+*{box-sizing:border-box}
+body{margin:0;background:#000;color:#f2efe8;font:20px/1.5 system-ui,"Noto Sans SC",sans-serif;overflow-x:hidden}
+header{display:flex;align-items:center;gap:18px;padding:18px 28px;background:#0d0f14;border-bottom:1px solid #252a34;position:sticky;top:0;z-index:5}
+.logo{font-size:30px;font-weight:800}.logo b{color:#e8b44a}
+.park{margin-left:auto;background:#3a2a07;color:#ffd968;border:1px solid #6b5518;border-radius:999px;padding:8px 18px;font-size:16px}
+.warn{margin:16px 28px 0;background:#2a1206;border:1px solid #7a3c10;color:#ffb37a;border-radius:12px;padding:12px 18px;font-size:17px}
+main{padding:10px 28px 50px}
+h2{font-size:26px;margin:30px 0 14px}
+.rail{display:flex;gap:18px;overflow-x:auto;padding-bottom:10px}
+.card{flex:0 0 210px;background:#14161c;border:2px solid #252a34;border-radius:14px;overflow:hidden;cursor:pointer}
+.card:active{border-color:#e8b44a}
+.card img{width:100%;aspect-ratio:2/3;object-fit:cover;display:block;background:#111}
+.card .t{padding:10px 12px 2px;font-size:19px;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.card .s{padding:0 12px 12px;font-size:15px;color:#8b8579;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.bigbtn{display:inline-block;background:#1b1f27;border:2px solid #3a4152;color:#f2efe8;border-radius:14px;padding:16px 30px;font-size:22px;cursor:pointer;margin:0 10px 12px 0}
+.bigbtn.on{background:#e8b44a;color:#1a1200;border-color:#e8b44a;font-weight:800}
+.bigbtn:active{transform:scale(.97)}
+video{width:100%;max-height:76vh;background:#000;border-radius:14px}
+#pv{display:none}
+.rowrap{display:flex;flex-wrap:wrap;margin:14px 0}
+#msg{color:#8b8579;padding:30px 0;font-size:20px}
+</style></head><body>
+<header><div class="logo">看剧<b>AI</b> · 车机模式</div><div class="park">🅿 驻车观影</div></header>
+<div class="warn">⚠ 行驶中特斯拉车机系统会自动暂停视频画面（影院模式与浏览器均如此），请挂 P 挡驻车时观看。本页已为大屏优化：大按钮、大字号、点开即全屏。</div>
+<main>
+  <div id="hv"><div id="msg">加载中…</div></div>
+  <div id="pv">
+    <button class="bigbtn" id="bk">← 返回</button>
+    <h2 id="pt" style="display:inline-block;margin-left:8px"></h2>
+    <video id="tv" controls playsinline></video>
+    <div class="rowrap" id="rates">
+      <button class="bigbtn" data-r="0.75">0.75x</button>
+      <button class="bigbtn on" data-r="1">1x</button>
+      <button class="bigbtn" data-r="1.25">1.25x</button>
+      <button class="bigbtn" data-r="1.5">1.5x</button>
+      <button class="bigbtn" data-r="2">2x</button>
+      <button class="bigbtn" id="fs">⛶ 全屏</button>
+    </div>
+    <h2>选集</h2><div class="rowrap" id="eps"></div>
+    <h2>线路</h2><div class="rowrap" id="lines"></div>
+    <div id="pmsg" style="color:#8b8579"></div>
+  </div>
+</main>
+<script>
+var $=function(id){return document.getElementById(id);};
+function E(t,c,h){var e=document.createElement(t);if(c)e.className=c;if(h!=null)e.innerHTML=h;return e;}
+function X(s){return String(s==null?'':s).replace(/[<>&"]/g,function(m){return {'<':'&lt;','>':'&gt;','&':'&amp;','"':'&quot;'}[m];});}
+var HLS=null;
+function card(c){
+  var d=E('div','card');
+  d.innerHTML='<img loading="lazy" src="'+X(c.poster||c.backdrop||'')+'"/><div class="t">'+X(c.title||'')+'</div><div class="s">'+X(c.remarks||c.year||'')+'</div>';
+  d.onclick=function(){ openTitle(c.id); };
+  return d;
+}
+function rail(title,items){
+  if(!items||!items.length) return;
+  $('hv').appendChild(E('h2',null,X(title)));
+  var r=E('div','rail'); items.slice(0,16).forEach(function(c){ r.appendChild(card(c)); });
+  $('hv').appendChild(r);
+}
+fetch('/api/rank').then(function(r){return r.json();}).then(function(d){ $('msg').remove(); rail('🔥 大家都在看', d.items); });
+fetch('/api/home').then(function(r){return r.json();}).then(function(d){
+  (d.sections||[]).slice(0,3).forEach(function(s){ rail(s.title, s.cards); });
+});
+function prox(u){ if(!u) return ''; if(u.charAt(0)==='/') return u; try{ return '/proxy?u='+encodeURIComponent(u)+'&ref='+encodeURIComponent((new URL(u)).origin+'/'); }catch(e){ return u; } }
+function playUrl(u){
+  var v=$('tv');
+  if(HLS){ HLS.destroy(); HLS=null; }
+  if(window.Hls&&Hls.isSupported()){
+    HLS=new Hls({maxBufferLength:30});
+    HLS.loadSource(u); HLS.attachMedia(v);
+    HLS.on(Hls.Events.MANIFEST_PARSED,function(){ v.play().catch(function(){}); tryFs(); });
+  } else { v.src=u; v.play().catch(function(){}); }
+}
+function tryFs(){ try{ var el=document.documentElement; if(el.requestFullscreen&&!document.fullscreenElement) el.requestFullscreen().catch(function(){}); }catch(e){} }
+$('fs').onclick=function(){ var v=$('tv'); try{ if(v.requestFullscreen) v.requestFullscreen(); }catch(e){} };
+$('rates').addEventListener('click',function(e){
+  var b=e.target.closest('[data-r]'); if(!b) return;
+  $('tv').playbackRate=parseFloat(b.getAttribute('data-r'));
+  $('rates').querySelectorAll('[data-r]').forEach(function(x){ x.classList.toggle('on', x===b); });
+});
+$('bk').onclick=function(){ $('pv').style.display='none'; $('hv').style.display='block'; var v=$('tv'); v.pause(); if(HLS){HLS.destroy();HLS=null;} if(window.scrollTo) scrollTo(0,0); };
+function openTitle(id){
+  $('hv').style.display='none'; $('pv').style.display='block'; if(window.scrollTo) scrollTo(0,0);
+  $('eps').innerHTML=''; $('lines').innerHTML=''; $('pmsg').textContent='加载中…';
+  fetch('/api/detail/'+encodeURIComponent(id)).then(function(r){return r.json();}).then(function(m){
+    if(!m.ok){ $('pmsg').textContent='详情失败'; return; }
+    $('pt').textContent=m.title||'';
+    var eps=m.episodes||[];
+    eps.forEach(function(ep,i){
+      var b=E('button','bigbtn'+(i===0?' on':''), X(ep.title||('第'+(i+1)+'集')));
+      b.onclick=function(){ $('eps').querySelectorAll('.bigbtn').forEach(function(x){x.classList.remove('on');}); b.classList.add('on'); loadLines(ep.token); };
+      $('eps').appendChild(b);
+    });
+    if(eps.length) loadLines(eps[0].token); else $('pmsg').textContent='暂无可播集数';
+  });
+}
+function loadLines(token){
+  $('lines').innerHTML=''; $('pmsg').textContent='解析线路中…';
+  fetch('/api/play/'+encodeURIComponent(token)).then(function(r){return r.json();}).then(function(d){
+    if(!d.ok){ $('pmsg').textContent='播放接口失败'; return; }
+    var ls=(d.lines||[]).filter(function(x){ return x.kind==='hls'||x.kind==='mp4'; });
+    ls.forEach(function(x,i){
+      var b=E('button','bigbtn'+(i===0?' on':''), (x.is4k?'4K ':'')+X(x.label||('线路'+(i+1))));
+      b.onclick=function(){ $('lines').querySelectorAll('.bigbtn').forEach(function(z){z.classList.remove('on');}); b.classList.add('on'); playUrl(prox(x.url)); };
+      $('lines').appendChild(b);
+    });
+    $('pmsg').textContent=ls.length?('共 '+ls.length+' 条可播线路'):'没有可播线路';
+    if(ls.length) playUrl(prox(ls[0].url));
+  });
+}
+</script>
+</body></html>

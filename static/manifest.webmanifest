@@ -1,0 +1,27 @@
+{
+  "name": "看剧AI",
+  "short_name": "看剧AI",
+  "description": "看剧AI 影视搜索与播放助手",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "display_override": ["standalone", "minimal-ui", "browser"],
+  "background_color": "#080706",
+  "theme_color": "#080706",
+  "orientation": "portrait-primary",
+  "categories": ["entertainment", "video"],
+  "icons": [
+    {
+      "src": "/assets/app-icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/assets/app-icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    }
+  ]
+}

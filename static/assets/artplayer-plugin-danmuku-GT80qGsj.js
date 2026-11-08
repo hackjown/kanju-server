@@ -1,0 +1,647 @@
+function X(a){switch(a){case 1:case 2:case 3:return 0;case 4:return 2;case 5:return 1;default:return 0}}function D(a){if(typeof a!="string")return[];const t=/<d[^>]*?p="(?<p>[^"]+)"[^>]*>(?<text>.*?)<\/d>/gs,e=a.matchAll(t);return Array.from(e).map(n=>{const i=n.groups.p.split(",");return i.length>=8?{text:n.groups.text.trim().replaceAll("&quot;",'"').replaceAll("&apos;","'").replaceAll("&lt;","<").replaceAll("&gt;",">").replaceAll("&amp;","&"),time:Number(i[0]),mode:X(Number(i[1])),fontSize:Number(i[2]),color:`#${Number(i[3]).toString(16)}`,timestamp:Number(i[4]),pool:Number(i[5]),userID:i[6],rowID:Number(i[7])}:null}).filter(Boolean)}function tt({data:a}){const{xml:t,id:e}=a;if(!e||!t)return;const n=D(t);globalThis.postMessage({danmus:n,id:e})}function et(){const a=`
+        ${X.toString()}
+        ${D.toString()}
+        onmessage = ${tt.toString()}
+    `,t=new Blob([a],{type:"application/javascript"});return new Worker(URL.createObjectURL(t))}function nt(a){return new Promise(async t=>{const n=await(await fetch(a)).text();try{const i=et();i.onmessage=s=>{const{danmus:r,id:d}=s.data;!d||!r||(t(r),i.terminate())},i.postMessage({xml:n,id:Date.now()})}catch(i){console.error("Error parsing Bilibili Danmu:",i);const s=D(n);t(s)}})}const _=`/*!
+ * artplayer-plugin-danmuku.js v5.3.0
+ * Github: https://github.com/zhw2590582/ArtPlayer
+ * (c) 2017-2026 Harvey Zhao
+ * Released under the MIT License.
+ */
+function getDanmuTop({ target, visibles, clientWidth, clientHeight, marginBottom, marginTop, antiOverlap }) {
+  const maxTop = clientHeight - marginBottom;
+  const danmus = visibles.filter((item) => item.mode === target.mode && item.top <= maxTop).sort((prev, next) => prev.top - next.top);
+  if (danmus.length === 0) {
+    if (target.mode === 2) {
+      return maxTop - target.height;
+    } else {
+      return marginTop;
+    }
+  }
+  danmus.unshift({
+    type: "top",
+    top: 0,
+    left: 0,
+    right: 0,
+    height: marginTop,
+    width: clientWidth,
+    speed: 0,
+    distance: clientWidth
+  });
+  danmus.push({
+    type: "bottom",
+    top: maxTop,
+    left: 0,
+    right: 0,
+    height: marginBottom,
+    width: clientWidth,
+    speed: 0,
+    distance: clientWidth
+  });
+  if (target.mode === 2) {
+    for (let index = danmus.length - 2; index >= 0; index -= 1) {
+      const item = danmus[index];
+      const prev = danmus[index + 1];
+      const itemBottom = item.top + item.height;
+      const diff = prev.top - itemBottom;
+      if (diff >= target.height) {
+        return prev.top - target.height;
+      }
+    }
+  } else {
+    for (let index = 1; index < danmus.length; index += 1) {
+      const item = danmus[index];
+      const prev = danmus[index - 1];
+      const prevBottom = prev.top + prev.height;
+      const diff = item.top - prevBottom;
+      if (diff >= target.height) {
+        return prevBottom;
+      }
+    }
+  }
+  const topMap = [];
+  for (let index = 1; index < danmus.length - 1; index += 1) {
+    const item = danmus[index];
+    if (topMap.length) {
+      const last = topMap[topMap.length - 1];
+      if (last[0].top === item.top) {
+        last.push(item);
+      } else {
+        topMap.push([item]);
+      }
+    } else {
+      topMap.push([item]);
+    }
+  }
+  if (antiOverlap) {
+    switch (target.mode) {
+      case 0: {
+        const result = topMap.find((list) => {
+          return list.every((danmu) => {
+            if (clientWidth < danmu.distance)
+              return false;
+            if (target.speed < danmu.speed)
+              return true;
+            const overlapTime = danmu.right / (target.speed - danmu.speed);
+            if (overlapTime > danmu.time)
+              return true;
+            return false;
+          });
+        });
+        return result && result[0] ? result[0].top : void 0;
+      }
+      // 静止弹幕没有重叠问题
+      case 1:
+      case 2:
+        return void 0;
+    }
+  } else {
+    switch (target.mode) {
+      case 0:
+        topMap.sort((prev, next) => {
+          const nextMinRight = Math.min(...next.map((item) => item.right));
+          const prevMinRight = Math.min(...prev.map((item) => item.right));
+          return nextMinRight * next.length - prevMinRight * prev.length;
+        });
+        break;
+      case 1:
+      case 2:
+        topMap.sort((prev, next) => {
+          const nextMaxWidth = Math.max(...next.map((item) => item.width));
+          const prevMaxWidth = Math.max(...prev.map((item) => item.width));
+          return prevMaxWidth * prev.length - nextMaxWidth * next.length;
+        });
+        break;
+    }
+    return topMap[0][0].top;
+  }
+}
+onmessage = (event) => {
+  const { data } = event;
+  if (!data.id || !data.type)
+    return;
+  const fns = { getDanmuTop };
+  const fn = fns[data.type];
+  const result = fn(data);
+  globalThis.postMessage({
+    result,
+    id: data.id
+  });
+};
+`,B=typeof self<"u"&&self.Blob&&new Blob(["URL.revokeObjectURL(import.meta.url);",_],{type:"text/javascript;charset=utf-8"});function it(a){let t;try{if(t=B&&(self.URL||self.webkitURL).createObjectURL(B),!t)throw"";const e=new Worker(t,{type:"module",name:a==null?void 0:a.name});return e.addEventListener("error",()=>{(self.URL||self.webkitURL).revokeObjectURL(t)}),e}catch{return new Worker("data:text/javascript;charset=utf-8,"+encodeURIComponent(_),{type:"module",name:a==null?void 0:a.name})}}class v{constructor(t,e){const{constructor:n,template:i}=t;this.utils=n.utils,this.validator=n.validator,this.$danmuku=i.$danmuku,this.$player=i.$player,this.art=t,this.queue=[],this.$refs=[],this.isStop=!1,this.isHide=!1,this.timer=null,this.index=0,this.option=v.option,this.states={wait:[],ready:[],emit:[],stop:[]},this.config(e,!0),this.worker=new it,this.start=this.start.bind(this),this.stop=this.stop.bind(this),this.reset=this.reset.bind(this),this.resize=this.resize.bind(this),this.destroy=this.destroy.bind(this),t.on("video:play",this.start),t.on("video:playing",this.start),t.on("video:pause",this.stop),t.on("video:waiting",this.stop),t.on("destroy",this.destroy),t.on("resize",this.resize),this.load()}static get option(){return{danmuku:[],speed:5,margin:[10,"25%"],opacity:1,color:"#FFFFFF",mode:0,modes:[0,1,2],fontSize:25,antiOverlap:!0,synchronousPlayback:!1,mount:void 0,heatmap:!1,width:512,points:[],filter:()=>!0,beforeEmit:()=>!0,beforeVisible:()=>!0,visible:!0,emitter:!0,maxLength:200,lockTime:5,theme:"dark",OPACITY:{},FONT_SIZE:{},MARGIN:{},SPEED:{},COLOR:[]}}static get scheme(){return{danmuku:"array|function|string",speed:"number",margin:"array",opacity:"number",color:"string",mode:"number",modes:"array",fontSize:"number|string",antiOverlap:"boolean",synchronousPlayback:"boolean",mount:"?htmldivelement|string",heatmap:"object|boolean",width:"number",points:"array",filter:"function",beforeEmit:"function",beforeVisible:"function",visible:"boolean",emitter:"boolean",maxLength:"number",lockTime:"number",theme:"string",OPACITY:"object",FONT_SIZE:"object",MARGIN:"object",SPEED:"object",COLOR:"array"}}static get cssText(){return`
+            user-select: none;
+            position: absolute;
+            white-space: pre;
+            pointer-events: none;
+            perspective: 500px;
+            display: inline-block;
+            will-change: transform;
+            font-weight: normal;
+            line-height: 1.125;
+            visibility: hidden;
+            font-family: SimHei, "Microsoft JhengHei", Arial, Helvetica, sans-serif;
+            text-shadow: rgb(0, 0, 0) 1px 0px 1px, rgb(0, 0, 0) 0px 1px 1px, rgb(0, 0, 0) 0px -1px 1px, rgb(0, 0, 0) -1px 0px 1px;
+        `}get isRotate(){var t,e;return(e=(t=this.art.plugins)==null?void 0:t.autoOrientation)==null?void 0:e.state}get marginTop(){const{clamp:t}=this.utils,e=this.option.margin[0],{clientHeight:n}=this.$player;if(typeof e=="number")return t(e,0,n);if(typeof e=="string"&&e.endsWith("%")){const i=Number.parseFloat(e)/100;return t(n*i,0,n)}return v.option.margin[0]}get marginBottom(){const{clamp:t}=this.utils,e=this.option.margin[1],{clientHeight:n}=this.$player;if(typeof e=="number")return t(e,0,n);if(typeof e=="string"&&e.endsWith("%")){const i=Number.parseFloat(e)/100;return t(n*i,0,n)}return v.option.margin[1]}get fontSize(){const{clamp:t}=this.utils,{clientHeight:e}=this.$player,n=this.option.fontSize;if(typeof n=="number")return Math.round(t(n,12,e));if(typeof n=="string"&&n.endsWith("%")){const i=Number.parseFloat(n)/100;return Math.round(t(e*i,12,e))}return v.option.fontSize}get $ref(){const t=this.$refs.pop()||document.createElement("div");return t.style.cssText=v.cssText,t.dataset.mode="",t.dataset.id="",t.className="",t}get readys(){const{currentTime:t}=this.art,e=[];return this.filter("ready",n=>e.push(n)),this.filter("wait",n=>{t+.1>=n.time&&n.time>=t-.1&&e.push(n)}),e}get visibles(){const t=[],{clientWidth:e}=this.$player,n=this.getLeft(this.$player);return this.filter("emit",i=>{const s=i.$ref.offsetTop,r=this.getLeft(i.$ref)-n,d=i.$ref.clientHeight,c=i.$ref.clientWidth,o=r+c,l=e-o,m=o/i.$restTime,f={};f.top=s,f.left=r,f.height=d,f.width=c,f.right=l,f.speed=m,f.distance=o,f.time=i.$restTime,f.mode=i.mode,t.push(f)}),t}get speed(){return this.option.synchronousPlayback&&this.art.playbackRate?this.option.speed/Number(this.art.playbackRate):this.option.speed}async load(t){const{errorHandle:e}=this.utils;let n=[];const i=t||this.option.danmuku;try{typeof i=="function"?n=await i():i instanceof Promise?n=await i:typeof i=="string"?n=await nt(i):Array.isArray(i)&&(n=i),e(Array.isArray(n),"Danmuku need return an array as result"),t===void 0&&(this.reset(),this.queue=[],this.states={wait:[],ready:[],emit:[],stop:[]},this.$refs=[],this.$danmuku.textContent="");for(let s=0;s<n.length;s++){const r=n[s];await this.emit(r)}this.art.emit("artplayerPluginDanmuku:loaded",this.queue)}catch(s){throw this.art.emit("artplayerPluginDanmuku:error",s),s}return this}async emit(t){const{clamp:e}=this.utils;if(this.validator(t,{id:"?string",text:"string",mode:"?number",color:"?string",time:"?number",border:"?boolean",style:"?object"}),!t.text.trim())return this;if(t.time?t.time=e(t.time,0,1/0):t.time=this.art.currentTime+.5,t.mode===void 0&&(t.mode=this.option.mode),t.style===void 0&&(t.style={}),t.color===void 0&&(t.color=this.option.color),![0,1,2].includes(t.mode))return this;if(!this.option.filter(t))return this;const n={...t,$state:"wait",$index:this.index++,$ref:null,$restTime:0,$lastStartTime:0};return this.setState(n,"wait"),this.queue.push(n),this}config(t,e=!1){const{clamp:n}=this.utils,{$controlsCenter:i}=this.art.template;return!Object.keys(t).some(r=>JSON.stringify(this.option[r])!==JSON.stringify(t[r]))&&!e?this:(this.option=Object.assign({},v.option,this.option,t),this.validator(this.option,v.scheme),this.option.mode=n(this.option.mode,0,2),this.option.speed=n(this.option.speed,1,10),this.option.opacity=n(this.option.opacity,0,1),this.option.lockTime=n(this.option.lockTime,1,60),this.option.maxLength=n(this.option.maxLength,1,1e3),this.option.mount=this.option.mount||i,t.fontSize&&this.reset(),this.option.visible?this.show():this.hide(),this.art.emit("artplayerPluginDanmuku:config",this.option),this)}getLeft(t){const e=t.getBoundingClientRect();return this.isRotate?e.top:e.left}postMessage(t={}){return new Promise(e=>{t.id=Date.now(),this.worker.postMessage(t),this.worker.onmessage=n=>{const{data:i}=n;i.id===t.id&&e(i)}})}filter(t,e){const n=this.states[t]||[];for(let i=0;i<n.length;i++)e(n[i]);return n}setState(t,e){this.states[t.$state]=this.states[t.$state].filter(n=>n!==t),t.$state=e,t.$ref&&(t.$ref.dataset.state=e),this.states[e].push(t)}makeWait(t){this.setState(t,"wait"),t.$ref&&(t.$ref.style.cssText=v.cssText,t.$ref.style.visibility="hidden",t.$ref.style.marginLeft="0px",t.$ref.style.transform="translateX(0px)",t.$ref.style.transition="transform 0s linear 0s",this.$refs.push(t.$ref),t.$ref=null)}update(){const{setStyles:t}=this.utils;return this.timer=window.requestAnimationFrame(async()=>{if(this.art.playing&&!this.isHide){this.filter("emit",n=>{const i=(Date.now()-n.$lastStartTime)/1e3;n.$restTime-=i,n.$lastStartTime=Date.now(),n.$restTime<=0&&this.makeWait(n)});const e=this.readys;for(let n=0;n<e.length;n++){const i=e[n];if(await this.option.beforeVisible(i)){const{clientWidth:r,clientHeight:d}=this.$player;i.$ref=this.$ref,i.$ref.textContent=i.text,this.$danmuku.appendChild(i.$ref),i.$ref.style.opacity=this.option.opacity,i.$ref.style.fontSize=`${this.fontSize}px`,i.$ref.style.color=i.color,i.$ref.style.border=i.border?`1px solid ${i.color}`:null,i.$ref.style.backgroundColor=i.border?"rgb(0 0 0 / 50%)":null,t(i.$ref,i.style),i.$lastStartTime=Date.now(),i.$restTime=this.speed;const c=r+i.$ref.clientWidth,{result:o}=await this.postMessage({type:"getDanmuTop",target:{mode:i.mode,height:i.$ref.clientHeight,speed:c/i.$restTime},visibles:this.visibles,antiOverlap:this.option.antiOverlap,clientWidth:r,clientHeight:d,marginBottom:this.marginBottom,marginTop:this.marginTop});if(i.$ref)if(!this.isStop&&o!==void 0){switch(this.setState(i,"emit"),i.$ref.style.top=`${o}px`,i.$ref.style.visibility="visible",i.$ref.dataset.mode=i.mode,i.$ref.dataset.id=i.id||"",i.mode){case 0:{i.$ref.style.left=`${r}px`,i.$ref.style.marginLeft="0px",i.$ref.style.transform=`translateX(${-c}px)`,i.$ref.style.transition=`transform ${i.$restTime}s linear 0s`;break}case 1:case 2:i.$ref.style.left="50%",i.$ref.style.marginLeft=`-${i.$ref.clientWidth/2}px`;break}this.art.emit("artplayerPluginDanmuku:visible",i)}else this.setState(i,"ready"),this.$refs.push(i.$ref),i.$ref=null}}}this.isStop||this.update()}),this}resize(){const{clientWidth:t}=this.$player;this.filter("stop",e=>{e.mode===0&&(e.$ref.style.left=`${t}px`)}),this.filter("emit",e=>{if(e.$lastStartTime=Date.now(),e.mode===0){const n=t+e.$ref.clientWidth;e.$ref.style.left=`${t}px`,e.$ref.style.transform=`translateX(${-n}px)`,e.$ref.style.transition=`transform ${e.$restTime}s linear 0s`}})}continue(){const{clientWidth:t}=this.$player;return this.filter("stop",e=>{if(this.setState(e,"emit"),e.$lastStartTime=Date.now(),e.mode===0){const n=t+e.$ref.clientWidth;e.$ref.style.transform=`translateX(${-n}px)`,e.$ref.style.transition=`transform ${e.$restTime}s linear 0s`}}),this}suspend(){const{clientWidth:t}=this.$player;return this.filter("emit",e=>{if(this.setState(e,"stop"),e.mode===0){const n=t-(this.getLeft(e.$ref)-this.getLeft(this.$player));e.$ref.style.transform=`translateX(${-n}px)`,e.$ref.style.transition="transform 0s linear 0s"}}),this}stop(){return this.isStop=!0,this.suspend(),window.cancelAnimationFrame(this.timer),this.art.emit("artplayerPluginDanmuku:stop"),this}start(){return this.isStop=!1,this.continue(),this.update(),this.art.emit("artplayerPluginDanmuku:start"),this}reset(){return this.queue.forEach(t=>this.makeWait(t)),this.art.emit("artplayerPluginDanmuku:reset"),this}show(){return this.isHide=!1,this.$danmuku.style.opacity=1,this.option.visible=!0,this.art.emit("artplayerPluginDanmuku:show"),this}hide(){return this.isHide=!0,this.$danmuku.style.opacity=0,this.option.visible=!1,this.art.emit("artplayerPluginDanmuku:hide"),this}destroy(){this.stop(),this.worker.terminate(),this.art.off("video:play",this.start),this.art.off("video:playing",this.start),this.art.off("video:pause",this.stop),this.art.off("video:waiting",this.stop),this.art.off("resize",this.reset),this.art.off("destroy",this.destroy),this.art.emit("artplayerPluginDanmuku:destroy")}}const F={map(a,t,e,n,i){return(a-t)*(i-n)/(e-t)+n},range(a,t,e){const n=Math.round(a/e)*e;return Array.from({length:Math.floor((t-a)/e)},(i,s)=>s*e+n)}};function at(a,t){const e=t[0]-a[0],n=t[1]-a[1];return{length:Math.sqrt(e**2+n**2),angle:Math.atan2(n,e)}}function st(a,t,e){const{query:n}=a.constructor.utils;a.controls.add({name:"heatmap",position:"top",html:"",style:{position:"absolute",top:"-100px",left:"0px",right:"0px",height:"100px",width:"100%",pointerEvents:"none"},mounted(i){let s=null,r=null;function d(c=[]){if(s=null,r=null,i.innerHTML="",!a.duration||a.option.isLive)return;const o={w:i.offsetWidth,h:i.offsetHeight},l={xMin:0,xMax:o.w,yMin:0,yMax:128,scale:.25,opacity:.2,minHeight:Math.floor(o.h*.05),sampling:Math.floor(o.w/100),smoothing:.2,flattening:.2};typeof e=="object"&&Object.assign(l,e);let m=[];if(Array.isArray(c)&&c.length)m=[...c];else{const p=a.duration/o.w;for(let h=0;h<=o.w;h+=l.sampling){const g=t.queue.filter(({time:y})=>y>h*p&&y<=(h+l.sampling)*p).length;m.push([h,g])}}if(m.length===0)return;const f=m[m.length-1],x=f[0],k=f[1];x!==o.w&&m.push([o.w,k]);const u=m.map(p=>p[1]),$=Math.min(...u),M=Math.max(...u),z=($+M)/2;for(let p=0;p<m.length;p++){const h=m[p],g=h[1];h[1]=g*(g>z?1+l.scale:1-l.scale)+l.minHeight}const w=(p,h,g,y)=>{const E=at(h||p,g||p),J=F.map(Math.cos(E.angle)*l.flattening,0,1,1,0),R=E.angle*J+(y?Math.PI:0),V=E.length*l.smoothing,K=p[0]+Math.cos(R)*V,Q=p[1]+Math.sin(R)*V;return[K,Q]},b=(p,h,g)=>{const y=w(g[h-1],g[h-2],p),T=w(p,g[h-1],g[h+1],!0),O=h===g.length-1?" z":"";return`C ${y[0]},${y[1]} ${T[0]},${T[1]} ${p[0]},${p[1]}${O}`},Y=m.map(p=>{const h=F.map(p[0],l.xMin,l.xMax,0,o.w),g=F.map(p[1],l.yMin,l.yMax,o.h,0);return[h,g]}).reduce((p,h,g,y)=>g===0?`M ${y[y.length-1][0]},${o.h} L ${h[0]},${o.h} L ${h[0]},${h[1]}`:`${p} ${b(h,g,y)}`,"");i.innerHTML=`
+                    <svg viewBox="0 0 ${o.w} ${o.h}">
+                        <defs>
+                            <linearGradient id="heatmap-solids" x1="0%" y1="0%" x2="100%" y2="0%">
+                                <stop offset="0%" style="stop-color:var(--art-theme);stop-opacity:${l.opacity}" />
+                                <stop offset="0%" style="stop-color:var(--art-theme);stop-opacity:${l.opacity}" id="heatmap-start" />
+                                <stop offset="0%" style="stop-color:var(--art-progress-color);stop-opacity:1" id="heatmap-stop" />
+                                <stop offset="100%" style="stop-color:var(--art-progress-color);stop-opacity:1" />
+                            </linearGradient>
+                        </defs>
+                        <path fill="url(#heatmap-solids)" d="${Y}"></path>
+                    </svg>
+                `,s=n("#heatmap-start",i),r=n("#heatmap-stop",i),s.setAttribute("offset",`${a.played*100}%`),r.setAttribute("offset",`${a.played*100}%`)}a.on("video:timeupdate",()=>{s&&r&&(s.setAttribute("offset",`${a.played*100}%`),r.setAttribute("offset",`${a.played*100}%`))}),a.on("setBar",(c,o)=>{s&&r&&c==="played"&&(s.setAttribute("offset",`${o*100}%`),r.setAttribute("offset",`${o*100}%`))}),a.on("ready",()=>d()),a.on("resize",()=>d()),a.on("artplayerPluginDanmuku:loaded",()=>d()),a.on("artplayerPluginDanmuku:points",c=>d(c))}})}const C='<svg  class="apd-icon apd-check-off" xmlns:xlink="http://www.w3.org/1999/xlink" xmlns="http://www.w3.org/2000/svg" data-pointer="none" viewBox="0 0 32 32" width="32"  height="32" ><path d="M8 6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2H8zm0-2h16c2.21 0 4 1.79 4 4v16c0 2.21-1.79 4-4 4H8c-2.21 0-4-1.79-4-4V8c0-2.21 1.79-4 4-4z" fill="#FFFFFF"></path></svg>',A='<svg class="apd-icon apd-check-on" xmlns:xlink="http://www.w3.org/1999/xlink" xmlns="http://www.w3.org/2000/svg" data-pointer="none" viewBox="0 0 32 32" width="32"  height="32" ><path d="m13 18.25-1.8-1.8c-.6-.6-1.65-.6-2.25 0s-.6 1.5 0 2.25l2.85 2.85c.318.318.762.468 1.2.448.438.02.882-.13 1.2-.448l8.85-8.85c.6-.6.6-1.65 0-2.25s-1.65-.6-2.25 0l-7.8 7.8zM8 4h16c2.21 0 4 1.79 4 4v16c0 2.21-1.79 4-4 4H8c-2.21 0-4-1.79-4-4V8c0-2.21 1.79-4 4-4z" fill="#00AEEC"></path></svg>',W='<svg class="apd-icon apd-config-icon" xmlns:xlink="http://www.w3.org/1999/xlink" xmlns="http://www.w3.org/2000/svg" data-pointer="none" viewBox="0 0 24 24" width="24"  height="24" ><path fill-rule="evenodd" d="m15.645 4.881 1.06-1.473a.998.998 0 1 0-1.622-1.166L13.22 4.835a110.67 110.67 0 0 0-1.1-.007h-.131c-.47 0-.975.004-1.515.012L8.783 2.3A.998.998 0 0 0 7.12 3.408l.988 1.484c-.688.019-1.418.042-2.188.069a4.013 4.013 0 0 0-3.83 3.44c-.165 1.15-.245 2.545-.245 4.185 0 1.965.115 3.67.35 5.116a4.012 4.012 0 0 0 3.763 3.363c1.903.094 3.317.141 5.513.141a.988.988 0 0 0 0-1.975 97.58 97.58 0 0 1-5.416-.139 2.037 2.037 0 0 1-1.91-1.708c-.216-1.324-.325-2.924-.325-4.798 0-1.563.076-2.864.225-3.904.14-.977.96-1.713 1.945-1.747 2.444-.087 4.465-.13 6.063-.131 1.598 0 3.62.044 6.064.13.96.034 1.71.81 1.855 1.814.075.524.113 1.962.141 3.065v.002c.005.183.01.07.014-.038.004-.096.008-.189.011-.081a.987.987 0 1 0 1.974-.069c-.004-.105-.007-.009-.011.09-.002.056-.004.112-.007.135l-.002.01a.574.574 0 0 1-.005-.091v-.027c-.03-1.118-.073-2.663-.16-3.276-.273-1.906-1.783-3.438-3.74-3.507-.905-.032-1.752-.058-2.543-.079Zm-3.113 4.703h-1.307v4.643h2.2v.04l.651-1.234c.113-.215.281-.389.482-.509v-.11h.235c.137-.049.283-.074.433-.074h1.553V9.584h-1.264a8.5 8.5 0 0 0 .741-1.405l-1.078-.381c-.24.631-.501 1.23-.806 1.786h-1.503l.686-.305c-.228-.501-.5-.959-.806-1.394l-1.034.348c.294.392.566.839.817 1.35Zm-1.7 5.502h2.16l-.564 1.068h-1.595v-1.068Zm-2.498-1.863.152-1.561h1.96V8.289H7.277v.969h2.048v1.435h-1.84l-.306 3.51h2.254c0 1.155-.043 1.906-.12 2.255-.076.348-.38.523-.925.523-.305 0-.61-.022-.893-.055l.294 1.056.061.005c.282.02.546.039.81.039.991-.065 1.547-.414 1.677-1.046.11-.631.175-1.883.175-3.757H8.334Zm5.09-.8v.85h-1.188v-.85h1.187Zm-1.188-.955h1.187v-.893h-1.187v.893Zm2.322.007v-.893h1.241v.893h-1.241Zm.528 2.757a1.26 1.26 0 0 1 1.087-.627l4.003-.009a1.26 1.26 0 0 1 1.094.63l1.721 2.982c.226.39.225.872-.001 1.263l-1.743 3a1.26 1.26 0 0 1-1.086.628l-4.003.009a1.26 1.26 0 0 1-1.094-.63l-1.722-2.982a1.26 1.26 0 0 1 .002-1.263l1.742-3Zm1.967.858a1.26 1.26 0 0 0-1.08.614l-.903 1.513a1.26 1.26 0 0 0-.002 1.289l.885 1.492c.227.384.64.62 1.086.618l2.192-.005a1.26 1.26 0 0 0 1.08-.615l.904-1.518a1.26 1.26 0 0 0 .001-1.288l-.884-1.489a1.26 1.26 0 0 0-1.086-.616l-2.193.005Zm2.517 2.76a1.4 1.4 0 1 1-2.8 0 1.4 1.4 0 0 1 2.8 0Z" clip-rule="evenodd"></path></svg>',q='<svg class="apd-icon apd-mode-0-off" xmlns:xlink="http://www.w3.org/1999/xlink" xmlns="http://www.w3.org/2000/svg" xml:space="preserve" data-pointer="none" style="enable-background:new 0 0 28 28" viewBox="0 0 28 28" width="28"  height="28" ><path d="M23 15c1.487 0 2.866.464 4 1.255V7a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v14a4 4 0 0 0 4 4h11.674A7 7 0 0 1 23 15zM11 9h6a1 1 0 0 1 0 2h-6a1 1 0 0 1 0-2zm-3 2H6V9h2v2zm4 4h-2v-2h2v2zm2-1a1 1 0 0 1 1-1h1a1 1 0 0 1 0 2h-1a1 1 0 0 1-1-1z" fill="#00AEEC"></path><path d="M26.536 18.464a5 5 0 0 0-7.071 0 5 5 0 0 0 0 7.071 5 5 0 1 0 7.071-7.071zm-5.657 5.657a3 3 0 0 1-.586-3.415l4.001 4.001a3 3 0 0 1-3.415-.586zm4.829-.827-4.001-4.001a3.002 3.002 0 0 1 4.001 4.001z" fill="#00AEEC"></path></svg>',L='<svg class="apd-icon apd-mode-0-on" xmlns:xlink="http://www.w3.org/1999/xlink" xmlns="http://www.w3.org/2000/svg" xml:space="preserve" data-pointer="none" style="enable-background:new 0 0 28 28" viewBox="0 0 28 28" width="28"  height="28" ><path d="M23 3H5a4 4 0 0 0-4 4v14a4 4 0 0 0 4 4h18a4 4 0 0 0 4-4V7a4 4 0 0 0-4-4zM11 9h6a1 1 0 0 1 0 2h-6a1 1 0 0 1 0-2zm-3 2H6V9h2v2zm4 4h-2v-2h2v2zm9 0h-6a1 1 0 0 1 0-2h6a1 1 0 0 1 0 2z" fill="#FFFFFF"></path></svg>',Z='<svg class="apd-icon apd-mode-1-off" xmlns:xlink="http://www.w3.org/1999/xlink" xmlns="http://www.w3.org/2000/svg" xml:space="preserve" data-pointer="none" style="enable-background:new 0 0 28 28" viewBox="0 0 28 28" width="28"  height="28" ><path d="M23 15c1.487 0 2.866.464 4 1.255V7a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v14a4 4 0 0 0 4 4h11.674A7 7 0 0 1 23 15zm-4-8h2v2h-2V7zM9 9H7V7h2v2zm4 0h-2V7h2v2zm2-2h2v2h-2V7z" fill="#00AEEC"></path><path d="M26.536 18.464a5 5 0 0 0-7.071 0 5 5 0 0 0 0 7.071 5 5 0 1 0 7.071-7.071zm-5.657 5.657a3 3 0 0 1-.586-3.415l4.001 4.001a3 3 0 0 1-3.415-.586zm4.829-.827-4.001-4.001a3.002 3.002 0 0 1 4.001 4.001z" fill="#00AEEC"></path></svg>',P='<svg class="apd-icon apd-mode-1-on" xmlns:xlink="http://www.w3.org/1999/xlink" xmlns="http://www.w3.org/2000/svg" xml:space="preserve" data-pointer="none" style="enable-background:new 0 0 28 28" viewBox="0 0 28 28" width="28"  height="28" ><path d="M23 3H5a4 4 0 0 0-4 4v14a4 4 0 0 0 4 4h18a4 4 0 0 0 4-4V7a4 4 0 0 0-4-4zM9 9H7V7h2v2zm4 0h-2V7h2v2zm4 0h-2V7h2v2zm4 0h-2V7h2v2z" fill="#FFFFFF"></path></svg>',j='<svg class="apd-icon apd-mode-2-off" xmlns:xlink="http://www.w3.org/1999/xlink" xmlns="http://www.w3.org/2000/svg" xml:space="preserve" data-pointer="none" style="enable-background:new 0 0 28 28" viewBox="0 0 28 28" width="28"  height="28" ><path d="M23 15c1.487 0 2.866.464 4 1.255V7a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v14a4 4 0 0 0 4 4h11.674A7 7 0 0 1 23 15zM9 21H7v-2h2v2zm4 0h-2v-2h2v2z" fill="#00AEEC"></path><path d="M26.536 18.464a5 5 0 0 0-7.071 0 5 5 0 0 0 0 7.071 5 5 0 1 0 7.071-7.071zm-5.657 5.657a3 3 0 0 1-.586-3.415l4.001 4.001a3 3 0 0 1-3.415-.586zm4.829-.827-4.001-4.001a3.002 3.002 0 0 1 4.001 4.001z" fill="#00AEEC"></path></svg>',H='<svg class="apd-icon apd-mode-2-on" xmlns:xlink="http://www.w3.org/1999/xlink" xmlns="http://www.w3.org/2000/svg" xml:space="preserve" data-pointer="none" style="enable-background:new 0 0 28 28" viewBox="0 0 28 28" width="28"  height="28" ><path d="M23 3H5a4 4 0 0 0-4 4v14a4 4 0 0 0 4 4h18a4 4 0 0 0 4-4V7a4 4 0 0 0-4-4zM9 21H7v-2h2v2zm4 0h-2v-2h2v2zm4 0h-2v-2h2v2zm4 0h-2v-2h2v2z" fill="#FFFFFF"></path></svg>',I='<svg class="apd-icon apd-toggle-off" xmlns:xlink="http://www.w3.org/1999/xlink" xmlns="http://www.w3.org/2000/svg" data-pointer="none" viewBox="0 0 24 24" width="24"  height="24" ><path fill-rule="evenodd" d="m8.085 4.891-.999-1.499a1.008 1.008 0 0 1 1.679-1.118l1.709 2.566c.54-.008 1.045-.012 1.515-.012h.13c.345 0 .707.003 1.088.007l1.862-2.59a1.008 1.008 0 0 1 1.637 1.177l-1.049 1.46c.788.02 1.631.046 2.53.078 1.958.069 3.468 1.6 3.74 3.507.088.613.13 2.158.16 3.276l.001.027c.01.333.017.63.025.856a.987.987 0 0 1-1.974.069c-.008-.23-.016-.539-.025-.881v-.002c-.028-1.103-.066-2.541-.142-3.065-.143-1.004-.895-1.78-1.854-1.813-2.444-.087-4.466-.13-6.064-.131-1.598 0-3.619.044-6.063.13a2.037 2.037 0 0 0-1.945 1.748c-.15 1.04-.225 2.341-.225 3.904 0 1.874.11 3.474.325 4.798.154.949.95 1.66 1.91 1.708a97.58 97.58 0 0 0 5.416.139.988.988 0 0 1 0 1.975c-2.196 0-3.61-.047-5.513-.141A4.012 4.012 0 0 1 2.197 17.7c-.236-1.446-.351-3.151-.351-5.116 0-1.64.08-3.035.245-4.184A4.013 4.013 0 0 1 5.92 4.96c.761-.027 1.483-.05 2.164-.069Zm4.436 4.707h-1.32v4.63h2.222v.848h-2.618v1.078h2.431a5.01 5.01 0 0 1 3.575-3.115V9.598h-1.276a8.59 8.59 0 0 0 .748-1.42l-1.089-.384a14.232 14.232 0 0 1-.814 1.804h-1.518l.693-.308a8.862 8.862 0 0 0-.814-1.408l-1.045.352c.297.396.572.847.825 1.364Zm-4.18 3.564.154-1.485h1.98V8.289h-3.2v.979h2.067v1.43H7.483l-.308 3.454h2.277c0 1.166-.044 1.925-.12 2.277-.078.352-.386.528-.936.528-.308 0-.616-.022-.902-.055l.297 1.067.062.004c.285.02.551.04.818.04 1.001-.066 1.562-.418 1.694-1.056.11-.638.176-1.903.176-3.795h-2.2Zm7.458.11v-.858h-1.254v.858H15.8Zm-2.376-.858v.858h-1.199v-.858h1.2Zm-1.199-.946h1.2v-.902h-1.2v.902Zm2.321 0v-.902H15.8v.902h-1.254Zm3.517 10.594a4 4 0 1 0 0-8 4 4 0 0 0 0 8Zm-.002-1.502a2.5 2.5 0 0 1-2.217-3.657l3.326 3.398a2.49 2.49 0 0 1-1.109.259Zm2.5-2.5c0 .42-.103.815-.286 1.162l-3.328-3.401a2.5 2.5 0 0 1 3.614 2.239Z" clip-rule="evenodd"></path></svg>',N='<svg class="apd-icon apd-toggle-on" xmlns:xlink="http://www.w3.org/1999/xlink" xmlns="http://www.w3.org/2000/svg" data-pointer="none" viewBox="0 0 24 24" width="24"  height="24" ><path fill-rule="evenodd" d="M11.989 4.828c-.47 0-.975.004-1.515.012l-1.71-2.566a1.008 1.008 0 0 0-1.678 1.118l.999 1.5c-.681.018-1.403.04-2.164.068a4.013 4.013 0 0 0-3.83 3.44c-.165 1.15-.245 2.545-.245 4.185 0 1.965.115 3.67.35 5.116a4.012 4.012 0 0 0 3.763 3.363l.906.046c1.205.063 1.808.095 3.607.095a.988.988 0 0 0 0-1.975c-1.758 0-2.339-.03-3.501-.092l-.915-.047a2.037 2.037 0 0 1-1.91-1.708c-.216-1.324-.325-2.924-.325-4.798 0-1.563.076-2.864.225-3.904.14-.977.96-1.713 1.945-1.747 2.444-.087 4.465-.13 6.063-.131 1.598 0 3.62.044 6.064.13.96.034 1.71.81 1.855 1.814.075.524.113 1.962.141 3.065v.002c.01.342.017.65.025.88a.987.987 0 1 0 1.974-.068c-.008-.226-.016-.523-.025-.856v-.027c-.03-1.118-.073-2.663-.16-3.276-.273-1.906-1.783-3.438-3.74-3.507-.9-.032-1.743-.058-2.531-.078l1.05-1.46a1.008 1.008 0 0 0-1.638-1.177l-1.862 2.59c-.38-.004-.744-.007-1.088-.007h-.13Zm.521 4.775h-1.32v4.631h2.222v.847h-2.618v1.078h2.618l.003.678c.36.026.714.163 1.01.407h.11v-1.085h2.694v-1.078h-2.695v-.847H16.8v-4.63h-1.276a8.59 8.59 0 0 0 .748-1.42L15.183 7.8a14.232 14.232 0 0 1-.814 1.804h-1.518l.693-.308a8.862 8.862 0 0 0-.814-1.408l-1.045.352c.297.396.572.847.825 1.364Zm-4.18 3.564.154-1.485h1.98V8.294h-3.2v.98H9.33v1.43H7.472l-.308 3.453h2.277c0 1.166-.044 1.925-.12 2.277-.078.352-.386.528-.936.528-.308 0-.616-.022-.902-.055l.297 1.067.062.005c.285.02.551.04.818.04 1.001-.067 1.562-.419 1.694-1.057.11-.638.176-1.903.176-3.795h-2.2Zm7.458.11v-.858h-1.254v.858h1.254Zm-2.376-.858v.858h-1.199v-.858h1.2Zm-1.199-.946h1.2v-.902h-1.2v.902Zm2.321 0v-.902h1.254v.902h-1.254Z" clip-rule="evenodd"></path><path fill="#00AEEC" fill-rule="evenodd" d="M22.846 14.627a1 1 0 0 0-1.412.075l-5.091 5.703-2.216-2.275-.097-.086-.008-.005a1 1 0 0 0-1.322 1.493l2.963 3.041.093.083.007.005c.407.315 1 .27 1.354-.124l5.81-6.505.08-.102.005-.008a1 1 0 0 0-.166-1.295Z" clip-rule="evenodd"></path></svg>',U='<svg class="apd-icon apd-style-icon" xmlns:xlink="http://www.w3.org/1999/xlink" xmlns="http://www.w3.org/2000/svg" xml:space="preserve" data-pointer="none" style="enable-background:new 0 0 22 22" viewBox="0 0 22 22" width="36"  height="24" ><path d="M17 16H5c-.55 0-1 .45-1 1s.45 1 1 1h12c.55 0 1-.45 1-1s-.45-1-1-1zM6.96 15c.39 0 .74-.24.89-.6l.65-1.6h5l.66 1.6c.15.36.5.6.89.6.69 0 1.15-.71.88-1.34l-3.88-8.97C11.87 4.27 11.46 4 11 4s-.87.27-1.05.69l-3.88 8.97c-.27.63.2 1.34.89 1.34zM11 5.98 12.87 11H9.13L11 5.98z"></path></svg>',ot=`.artplayer-plugin-danmuku {
+  display: flex;
+  position: relative;
+  z-index: 99;
+  align-items: center;
+  justify-content: center;
+  font-size: 12px;
+  height: 32px;
+  width: 100%;
+  color: #fff;
+  font-weight: 300;
+  flex-shrink: 0;
+  gap: 10px;
+}
+.artplayer-plugin-danmuku .apd-icon {
+  cursor: pointer;
+  opacity: 0.75;
+  transition: all 0.2s ease;
+  fill: #fff;
+}
+.artplayer-plugin-danmuku .apd-icon:hover {
+  opacity: 1;
+}
+.artplayer-plugin-danmuku .apd-config {
+  display: flex;
+  position: relative;
+}
+.artplayer-plugin-danmuku .apd-config .apd-config-panel {
+  position: absolute;
+  bottom: 24px;
+  left: 0;
+  width: 320px;
+  padding: 10px;
+  opacity: 0;
+  pointer-events: none;
+}
+.artplayer-plugin-danmuku .apd-config .apd-config-panel .apd-config-panel-inner {
+  width: 100%;
+  border-radius: 3px;
+  background-color: rgba(0, 0, 0, 0.85);
+  padding: 10px;
+}
+.artplayer-plugin-danmuku .apd-config:hover .apd-config-panel {
+  opacity: 100;
+  pointer-events: all;
+}
+.artplayer-plugin-danmuku .apd-config-mode,
+.artplayer-plugin-danmuku .apd-config-slider,
+.artplayer-plugin-danmuku .apd-config-other,
+.artplayer-plugin-danmuku .apd-style-mode {
+  margin-bottom: 15px;
+}
+.artplayer-plugin-danmuku .apd-modes {
+  display: flex;
+  align-items: center;
+  margin-top: 5px;
+  gap: 20px;
+}
+.artplayer-plugin-danmuku .apd-modes .apd-mode {
+  cursor: pointer;
+  text-align: center;
+}
+.artplayer-plugin-danmuku .apd-modes .apd-mode:hover {
+  color: #00a1d6;
+}
+.artplayer-plugin-danmuku .apd-config-slider {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.artplayer-plugin-danmuku .apd-config-slider .apd-value {
+  width: 32px;
+  text-align: right;
+}
+.artplayer-plugin-danmuku .apd-slider {
+  position: relative;
+  flex: 1;
+  display: flex;
+  height: 20px;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+.artplayer-plugin-danmuku .apd-slider .apd-slider-line {
+  position: relative;
+  height: 2px;
+  width: 100%;
+  overflow: hidden;
+  border-radius: 3px;
+  background-color: rgba(255, 255, 255, 0.25);
+}
+.artplayer-plugin-danmuku .apd-slider .apd-slider-points {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.artplayer-plugin-danmuku .apd-slider .apd-slider-points .apd-slider-point {
+  width: 2px;
+  height: 2px;
+  border-radius: 50%;
+  background-color: rgba(255, 255, 255, 0.5);
+}
+.artplayer-plugin-danmuku .apd-slider .apd-slider-progress {
+  width: 0%;
+  height: 100%;
+  background-color: #00a1d6;
+}
+.artplayer-plugin-danmuku .apd-slider .apd-slider-dot {
+  position: absolute;
+  transform: translateX(-6px);
+  left: 0%;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background-color: #00a1d6;
+}
+.artplayer-plugin-danmuku .apd-slider .apd-slider-steps {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  position: absolute;
+  bottom: -12px;
+  width: calc(100% + 32px);
+  color: #777;
+}
+.artplayer-plugin-danmuku .apd-slider .apd-slider-steps .apd-slider-step {
+  flex-shrink: 0;
+  width: 36px;
+  text-align: center;
+  scale: 0.95;
+}
+.artplayer-plugin-danmuku .apd-config-other {
+  display: flex;
+  align-items: center;
+  gap: 20px;
+}
+.artplayer-plugin-danmuku .apd-config-other .apd-check-off,
+.artplayer-plugin-danmuku .apd-config-other .apd-check-on {
+  width: 16px;
+  height: 16px;
+}
+.artplayer-plugin-danmuku .apd-config-other .apd-other {
+  display: flex;
+  align-items: center;
+  cursor: pointer;
+  gap: 2px;
+}
+.artplayer-plugin-danmuku .apd-config-other .apd-other:hover {
+  color: #00a1d6;
+}
+.artplayer-plugin-danmuku .apd-emitter {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  height: 100%;
+  background-color: rgba(255, 255, 255, 0.25);
+  border-radius: 5px;
+}
+.artplayer-plugin-danmuku .apd-style {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.artplayer-plugin-danmuku .apd-style .apd-style-panel {
+  position: absolute;
+  bottom: 24px;
+  left: 0;
+  width: 200px;
+  padding: 10px;
+  opacity: 0;
+  pointer-events: none;
+}
+.artplayer-plugin-danmuku .apd-style .apd-style-panel .apd-style-panel-inner {
+  width: 100%;
+  border-radius: 3px;
+  background-color: rgba(0, 0, 0, 0.85);
+  padding: 10px;
+}
+.artplayer-plugin-danmuku .apd-style:hover .apd-style-panel {
+  opacity: 100;
+  pointer-events: all;
+}
+.artplayer-plugin-danmuku .apd-colors {
+  display: flex;
+  flex-wrap: wrap;
+  margin-top: 5px;
+  gap: 8px;
+}
+.artplayer-plugin-danmuku .apd-colors .apd-color {
+  width: 16px;
+  height: 16px;
+  border-radius: 2px;
+  cursor: pointer;
+}
+.artplayer-plugin-danmuku .apd-colors .apd-color.apd-active {
+  border: 1px solid black;
+  box-shadow: 0 0 0 1px #fff;
+}
+.artplayer-plugin-danmuku .apd-input {
+  outline: none;
+  height: 100%;
+  flex: 1;
+  min-width: 0;
+  width: auto;
+  border: none;
+  line-height: 1;
+  color: #fff;
+  background-color: transparent;
+}
+.artplayer-plugin-danmuku .apd-input::placeholder {
+  color: rgba(255, 255, 255, 0.5);
+}
+.artplayer-plugin-danmuku .apd-send {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  width: 60px;
+  flex-shrink: 0;
+  cursor: pointer;
+  text-shadow: none;
+  border-top-right-radius: 5px;
+  border-bottom-right-radius: 5px;
+  background-color: #00a1d6;
+}
+.artplayer-plugin-danmuku .apd-send.apd-lock {
+  cursor: not-allowed;
+  color: #666;
+  background-color: #e7e7e7;
+}
+.art-controls-center .apd-emitter {
+  width: 260px;
+  flex: none;
+}
+.art-fullscreen .artplayer-plugin-danmuku,
+.art-fullscreen-web .artplayer-plugin-danmuku {
+  height: 38px;
+  gap: 16px;
+}
+.art-fullscreen .artplayer-plugin-danmuku .apd-config-icon,
+.art-fullscreen-web .artplayer-plugin-danmuku .apd-config-icon,
+.art-fullscreen .artplayer-plugin-danmuku .apd-toggle-off,
+.art-fullscreen-web .artplayer-plugin-danmuku .apd-toggle-off,
+.art-fullscreen .artplayer-plugin-danmuku .apd-toggle-on,
+.art-fullscreen-web .artplayer-plugin-danmuku .apd-toggle-on {
+  width: 28px;
+  height: 28px;
+}
+.art-fullscreen .artplayer-plugin-danmuku .apd-emitter,
+.art-fullscreen-web .artplayer-plugin-danmuku .apd-emitter {
+  width: 400px;
+  flex: none;
+}
+.art-video-player > .artplayer-plugin-danmuku {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: -40px;
+  padding: 0 10px;
+}
+.art-video-player:has(> .artplayer-plugin-danmuku) {
+  margin-bottom: 40px;
+}
+[data-danmuku-emitter='false'] .apd-emitter {
+  display: none !important;
+}
+[data-danmuku-emitter='false'] .art-controls-center .artplayer-plugin-danmuku {
+  justify-content: flex-end;
+  gap: 18px;
+}
+[data-danmuku-emitter='false'].art-fullscreen .art-controls-center .artplayer-plugin-danmuku,
+[data-danmuku-emitter='false'].art-fullscreen-web .art-controls-center .artplayer-plugin-danmuku {
+  gap: 24px;
+}
+[data-danmuku-theme='light'] > .artplayer-plugin-danmuku .apd-icon {
+  fill: #333;
+}
+[data-danmuku-theme='light'] > .artplayer-plugin-danmuku .apd-emitter {
+  background-color: #f1f2f3;
+}
+[data-danmuku-theme='light'] > .artplayer-plugin-danmuku .apd-input {
+  color: #000;
+}
+[data-danmuku-theme='light'] > .artplayer-plugin-danmuku .apd-input::placeholder {
+  color: rgba(0, 0, 0, 0.3);
+}
+[data-danmuku-visible='false'] .apd-toggle-off {
+  display: block;
+}
+[data-danmuku-visible='false'] .apd-toggle-on {
+  display: none;
+}
+[data-danmuku-visible='true'] .apd-toggle-off {
+  display: none;
+}
+[data-danmuku-visible='true'] .apd-toggle-on {
+  display: block;
+}
+[data-danmuku-anti-overlap='false'] .apd-anti-overlap .apd-check-on {
+  display: none;
+}
+[data-danmuku-anti-overlap='false'] .apd-anti-overlap .apd-check-off {
+  display: block;
+}
+[data-danmuku-anti-overlap='true'] .apd-anti-overlap .apd-check-on {
+  display: block;
+}
+[data-danmuku-anti-overlap='true'] .apd-anti-overlap .apd-check-off {
+  display: none;
+}
+[data-danmuku-sync-video='false'] .apd-sync-video .apd-check-on {
+  display: none;
+}
+[data-danmuku-sync-video='false'] .apd-sync-video .apd-check-off {
+  display: block;
+}
+[data-danmuku-sync-video='true'] .apd-sync-video .apd-check-on {
+  display: block;
+}
+[data-danmuku-sync-video='true'] .apd-sync-video .apd-check-off {
+  display: none;
+}
+[data-danmuku-mode0='false'] .apd-config-mode .apd-mode-0-off {
+  display: block;
+}
+[data-danmuku-mode0='false'] .apd-config-mode .apd-mode-0-on {
+  display: none;
+}
+[data-danmuku-mode0='false'] .art-danmuku [data-mode='0'] {
+  opacity: 0 !important;
+}
+[data-danmuku-mode0='true'] .apd-config-mode .apd-mode-0-off {
+  display: none;
+}
+[data-danmuku-mode0='true'] .apd-config-mode .apd-mode-0-on {
+  display: block;
+}
+[data-danmuku-mode='0'] .apd-style-mode [data-mode='0'] {
+  color: #00a1d6;
+}
+[data-danmuku-mode='0'] .apd-style-mode [data-mode='0'] path {
+  fill: #00a1d6;
+}
+[data-danmuku-mode1='false'] .apd-config-mode .apd-mode-1-off {
+  display: block;
+}
+[data-danmuku-mode1='false'] .apd-config-mode .apd-mode-1-on {
+  display: none;
+}
+[data-danmuku-mode1='false'] .art-danmuku [data-mode='1'] {
+  opacity: 0 !important;
+}
+[data-danmuku-mode1='true'] .apd-config-mode .apd-mode-1-off {
+  display: none;
+}
+[data-danmuku-mode1='true'] .apd-config-mode .apd-mode-1-on {
+  display: block;
+}
+[data-danmuku-mode='1'] .apd-style-mode [data-mode='1'] {
+  color: #00a1d6;
+}
+[data-danmuku-mode='1'] .apd-style-mode [data-mode='1'] path {
+  fill: #00a1d6;
+}
+[data-danmuku-mode2='false'] .apd-config-mode .apd-mode-2-off {
+  display: block;
+}
+[data-danmuku-mode2='false'] .apd-config-mode .apd-mode-2-on {
+  display: none;
+}
+[data-danmuku-mode2='false'] .art-danmuku [data-mode='2'] {
+  opacity: 0 !important;
+}
+[data-danmuku-mode2='true'] .apd-config-mode .apd-mode-2-off {
+  display: none;
+}
+[data-danmuku-mode2='true'] .apd-config-mode .apd-mode-2-on {
+  display: block;
+}
+[data-danmuku-mode='2'] .apd-style-mode [data-mode='2'] {
+  color: #00a1d6;
+}
+[data-danmuku-mode='2'] .apd-style-mode [data-mode='2'] path {
+  fill: #00a1d6;
+}
+`;class G{constructor(t,e){this.art=t,this.danmuku=e,this.utils=t.constructor.utils;const{setStyle:n}=this.utils,{$controlsCenter:i}=t.template;n(i,"display","flex"),this.template={$controlsCenter:i,$mount:i,$danmuku:null,$toggle:null,$config:null,$configPanel:null,$configModes:null,$style:null,$stylePanel:null,$styleModes:null,$colors:null,$opacitySlider:null,$opacityValue:null,$marginSlider:null,$marginValue:null,$fontSizeSlider:null,$fontSizeValue:null,$speedSlider:null,$speedValue:null,$input:null,$send:null},this.slider={opacity:null,margin:null,fontSize:null,speed:null},this.emitting=!1,this.isLock=!1,this.timer=null,this.createTemplate(),this.createSliders(),this.createEvents(),this.mount(this.option.mount),t.on("resize",()=>this.resize()),t.on("fullscreen",s=>this.onFullscreen(s)),t.on("fullscreenWeb",s=>this.onFullscreen(s)),t.proxy(this.template.$config,"mouseenter",()=>{this.onMouseEnter({$control:this.template.$config,$panel:this.template.$configPanel})}),t.proxy(this.template.$style,"mouseenter",()=>{this.onMouseEnter({$control:this.template.$style,$panel:this.template.$stylePanel})})}static get icons(){return{$on:N,$off:I,$config:W,$style:U,$mode_0_off:q,$mode_0_on:L,$mode_1_off:Z,$mode_1_on:P,$mode_2_off:j,$mode_2_on:H,$check_on:A,$check_off:C}}get option(){return this.danmuku.option}get outside(){return this.template.$mount!==this.template.$controlsCenter}get TEMPLATE(){const{option:t}=this;return`
+            <div class="apd-toggle">
+                ${N}${I}
+            </div>
+            <div class="apd-config">
+                ${W}
+                <div class="apd-config-panel">
+                    <div class="apd-config-panel-inner">
+                        <div class="apd-config-mode">
+                            按类型屏蔽
+                            <div class="apd-modes">
+                                <div data-mode="0" class="apd-mode">
+                                    ${q}${L}
+                                    <div>滚动</div>
+                                </div>
+                                <div data-mode="1" class="apd-mode">
+                                    ${Z}${P}
+                                    <div>顶部</div>
+                                </div>
+                                <div data-mode="2" class="apd-mode">
+                                    ${j}${H}
+                                    <div>底部</div>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="apd-config-other">
+                            <div class="apd-other apd-anti-overlap">
+                                ${A}${C}
+                                防止弹幕重叠
+                            </div>
+                            <div class="apd-other apd-sync-video">
+                                ${A}${C}
+                                同步视频速度
+                            </div>
+                        </div>
+                        <div class="apd-config-slider apd-config-opacity">
+                            不透明度
+                            <div class="apd-slider"></div>
+                            <div class="apd-value">未知</div>
+                        </div>
+                        <div class="apd-config-slider apd-config-margin">
+                            显示区域
+                            <div class="apd-slider"></div>
+                            <div class="apd-value">未知</div>
+                        </div>
+                        <div class="apd-config-slider apd-config-fontSize">
+                            弹幕字号
+                            <div class="apd-slider"></div>
+                            <div class="apd-value">未知</div>
+                        </div>
+                        <div class="apd-config-slider apd-config-speed">
+                            弹幕速度
+                            <div class="apd-slider"></div>
+                            <div class="apd-value">未知</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <div class="apd-emitter">
+                <div class="apd-style">
+                    ${U}
+                    <div class="apd-style-panel">
+                        <div class="apd-style-panel-inner">
+                            <div class="apd-style-mode">
+                                模式
+                                <div class="apd-modes">
+                                    <div data-mode="0" class="apd-mode">
+                                        ${L}
+                                        <div>滚动</div>
+                                    </div>
+                                    <div data-mode="1" class="apd-mode">
+                                        ${P}
+                                        <div>顶部</div>
+                                    </div>
+                                    <div data-mode="2" class="apd-mode">
+                                        ${H}
+                                        <div>底部</div>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="apd-style-color">
+                                颜色
+                                <div class="apd-colors">
+                                    ${this.COLOR.map(e=>`<div data-color="${e}" class="apd-color" style="background-color: ${e}"></div>`).join("")}
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <input class="apd-input" placeholder="发个友善的弹幕见证当下" autocomplete="off" maxLength="${t.maxLength}" />
+                <div class="apd-send">发送</div>
+            </div>
+        `}get OPACITY(){return{min:0,max:100,steps:[],...this.option.OPACITY}}get FONT_SIZE(){return{min:12,max:120,steps:[],...this.option.FONT_SIZE}}get MARGIN(){return{min:0,max:3,steps:[{name:"1/4",value:[10,"75%"]},{name:"半屏",value:[10,"50%"]},{name:"3/4",value:[10,"25%"]},{name:"满屏",value:[10,10]}],...this.option.MARGIN}}get SPEED(){return{min:0,max:4,steps:[{name:"极慢",value:10},{name:"较慢",value:7.5,hide:!0},{name:"适中",value:5},{name:"较快",value:2.5,hide:!0},{name:"极快",value:1}],...this.option.SPEED}}get COLOR(){return this.option.COLOR.length?this.option.COLOR:["#FE0302","#FF7204","#FFAA02","#FFD302","#FFFF00","#A0EE00","#00CD00","#019899","#4266BE","#89D5FF","#CC0273","#222222","#9B9B9B","#FFFFFF"]}query(t){const{query:e}=this.utils,{$danmuku:n}=this.template;return e(t,n)}append(t,e){const{append:n}=this.utils;[...t.children].includes(e)||n(t,e)}setData(t,e){const{$player:n}=this.art.template,{$mount:i}=this.template;n.dataset[t]=e,this.outside&&(i.dataset[t]=e)}createTemplate(){const{createElement:t,tooltip:e}=this.utils,n=t("div");n.className="artplayer-plugin-danmuku",n.innerHTML=this.TEMPLATE,this.template.$danmuku=n,this.template.$toggle=this.query(".apd-toggle"),this.template.$config=this.query(".apd-config"),this.template.$configPanel=this.query(".apd-config-panel"),this.template.$configModes=this.query(".apd-config-mode .apd-modes"),this.template.$style=this.query(".apd-style"),this.template.$stylePanel=this.query(".apd-style-panel"),this.template.$styleModes=this.query(".apd-style-mode .apd-modes"),this.template.$colors=this.query(".apd-colors"),this.template.$antiOverlap=this.query(".apd-anti-overlap"),this.template.$syncVideo=this.query(".apd-sync-video"),this.template.$opacitySlider=this.query(".apd-config-opacity .apd-slider"),this.template.$opacityValue=this.query(".apd-config-opacity .apd-value"),this.template.$marginSlider=this.query(".apd-config-margin .apd-slider"),this.template.$marginValue=this.query(".apd-config-margin .apd-value"),this.template.$fontSizeSlider=this.query(".apd-config-fontSize .apd-slider"),this.template.$fontSizeValue=this.query(".apd-config-fontSize .apd-value"),this.template.$speedSlider=this.query(".apd-config-speed .apd-slider"),this.template.$speedValue=this.query(".apd-config-speed .apd-value"),this.template.$input=this.query(".apd-input"),this.template.$send=this.query(".apd-send");const{$toggle:i}=this.template;this.art.on("artplayerPluginDanmuku:show",()=>{e(i,"关闭弹幕")}),this.art.on("artplayerPluginDanmuku:hide",()=>{e(i,"打开弹幕")})}createEvents(){const{$toggle:t,$configModes:e,$styleModes:n,$colors:i,$antiOverlap:s,$syncVideo:r,$send:d,$input:c}=this.template;this.art.proxy(t,"click",()=>{this.danmuku.config({visible:!this.option.visible}),this.reset()}),this.art.proxy(e,"click",o=>{const l=o.target.closest(".apd-mode");if(!l)return;const m=Number(l.dataset.mode);this.option.modes.includes(m)?this.danmuku.config({modes:this.option.modes.filter(f=>f!==m)}):this.danmuku.config({modes:[...this.option.modes,m]}),this.reset()}),this.art.proxy(s,"click",()=>{this.danmuku.config({antiOverlap:!this.option.antiOverlap}),this.reset()}),this.art.proxy(r,"click",()=>{this.danmuku.config({synchronousPlayback:!this.option.synchronousPlayback}),this.reset()}),this.art.proxy(n,"click",o=>{const l=o.target.closest(".apd-mode");if(!l)return;const m=Number(l.dataset.mode);this.danmuku.config({mode:m}),this.reset()}),this.art.proxy(i,"click",o=>{const l=o.target.closest(".apd-color");l&&(this.danmuku.config({color:l.dataset.color}),this.reset())}),this.art.proxy(d,"click",()=>this.emit()),this.art.proxy(c,"keypress",o=>{o.key==="Enter"&&(o.preventDefault(),this.emit())})}createSliders(){this.slider.opacity=this.createSlider({...this.OPACITY,container:this.template.$opacitySlider,findIndex:()=>Math.round(this.option.opacity*100),onChange:t=>{const{$opacityValue:e}=this.template;e.textContent=`${t}%`,this.danmuku.config({opacity:t/100})}}),this.slider.margin=this.createSlider({...this.MARGIN,container:this.template.$marginSlider,findIndex:()=>this.MARGIN.steps.findIndex(t=>t.value[0]===this.option.margin[0]&&t.value[1]===this.option.margin[1]),onChange:t=>{const e=this.MARGIN.steps[t];if(!e)return;const{$marginValue:n}=this.template;n.textContent=e.name,this.danmuku.config({margin:e.value})}}),this.slider.fontSize=this.createSlider({...this.FONT_SIZE,container:this.template.$fontSizeSlider,findIndex:()=>this.danmuku.fontSize,onChange:t=>{const{$fontSizeValue:e}=this.template;e.textContent=`${t}px`,t!==this.danmuku.fontSize&&this.danmuku.config({fontSize:t})}}),this.slider.speed=this.createSlider({...this.SPEED,container:this.template.$speedSlider,findIndex:()=>this.SPEED.steps.findIndex(t=>t.value===this.option.speed),onChange:t=>{const e=this.SPEED.steps[t];if(!e)return;const{$speedValue:n}=this.template;n.textContent=e.name,this.danmuku.config({speed:e.value})}})}createSlider({min:t,max:e,container:n,findIndex:i,onChange:s,steps:r=[]}){const{query:d,clamp:c,setStyle:o}=this.utils;o(n,"touch-action","none"),n.innerHTML=`
+            <div class="apd-slider-line">
+                <div class="apd-slider-points">
+                    ${r.map(()=>'<div class="apd-slider-point"></div>').join("")}
+                </div>
+                <div class="apd-slider-progress"></div>
+            </div>
+            <div class="apd-slider-dot"></div>
+            <div class="apd-slider-steps">
+                ${r.map(u=>u.hide?"":`<div class="apd-slider-step">${u.name}</div>`).join("")}
+            </div>
+        `;const l=d(".apd-slider-dot",n),m=d(".apd-slider-progress",n);let f=!1;function x(u=i()){if(u<t||u>e)return;const $=(u-t)/(e-t);l.style.left=`${$*100}%`,r.length===0&&(m.style.width=l.style.left),s(u)}function k(u){const{top:$,height:M,left:z,width:w}=n.getBoundingClientRect();if(this.art.isRotate){const b=c(u.clientY-$,0,M),S=Math.round(b/M*(e-t)+t);x(S)}else{const b=c(u.clientX-z,0,w),S=Math.round(b/w*(e-t)+t);x(S)}}return this.art.proxy(n,"click",u=>{k.call(this,u)}),this.art.proxy(n,"pointerdown",u=>{f=u.button===0}),this.art.on("document:pointermove",u=>{f&&k.call(this,u)}),this.art.on("document:pointerup",u=>{f&&(f=!1,k.call(this,u))}),{reset:x}}onFullscreen(t){const{$danmuku:e,$controlsCenter:n,$mount:i}=this.template;this.outside?t?this.append(n,e):this.append(i,e):this.append(n,e)}onMouseEnter({$control:t,$panel:e}){const{$player:n}=this.art.template,i=t.getBoundingClientRect(),s=e.getBoundingClientRect(),r=n.getBoundingClientRect(),d=s.width/2-i.width/2,c=r.left-(i.left-d),o=i.right+d-r.right;c>0?e.style.left=`${-d+c}px`:o>0?e.style.left=`${-d-o}px`:e.style.left=`${-d}px`}async emit(){const{$input:t}=this.template,e=t.value.trim();if(!e.length||this.isLock||this.emitting)return;const n={text:e,mode:this.option.mode,color:this.option.color,time:this.art.currentTime};try{this.emitting=!0;const i=await this.option.beforeEmit(n);if(this.emitting=!1,i!==!0)return;n.border=!0,delete n.time,this.danmuku.emit(n),t.value="",this.lock()}catch(i){console.error("Error emitting danmuku:",i),this.emitting=!1}}lock(){const{addClass:t}=this.utils,{$send:e}=this.template;this.isLock=!0;let n=this.option.lockTime;e.textContent=n,t(e,"apd-lock");const i=()=>{this.timer=setTimeout(()=>{n===0?this.unlock():(n-=1,e.textContent=n,i())},1e3)};i()}unlock(){const{removeClass:t}=this.utils,{$send:e}=this.template;clearTimeout(this.timer),this.isLock=!1,e.textContent="发送",t(e,"apd-lock")}resize(){if(this.outside||this.art.fullscreen||this.art.fullscreenWeb)return;const{$player:t,$controlsCenter:e}=this.art.template,{$danmuku:n}=this.template;this.art.width<this.option.width?this.append(t,n):this.append(e,n)}reset(){const{inverseClass:t,tooltip:e}=this.utils,{$toggle:n,$colors:i}=this.template;this.slider.opacity.reset(),this.slider.margin.reset(),this.slider.fontSize.reset(),this.slider.speed.reset(),this.setData("danmukuVisible",this.option.visible),this.setData("danmukuMode",this.option.mode),this.setData("danmukuColor",this.option.color),this.setData("danmukuMode0",this.option.modes.includes(0)),this.setData("danmukuMode1",this.option.modes.includes(1)),this.setData("danmukuMode2",this.option.modes.includes(2)),this.setData("danmukuAntiOverlap",this.option.antiOverlap),this.setData("danmukuSyncVideo",this.option.synchronousPlayback),this.setData("danmukuTheme",this.option.theme),this.setData("danmukuEmitter",this.option.emitter);const s=i.children,r=Array.from(s).find(d=>d.dataset.color===this.option.color.toUpperCase());r&&t(r,"apd-active"),e(n,this.option.visible?"关闭弹幕":"打开弹幕"),this.resize()}mount(t){const{errorHandle:e}=this.utils,n=typeof t=="string"?document.querySelector(t):t;e(n,`Can not find the mount point: ${t}`),this.append(n,this.template.$danmuku),this.template.$mount=n,this.reset()}}if(typeof document<"u"){const a="artplayer-plugin-danmuku";let t=document.getElementById(a);t||(t=document.createElement("style"),t.id=a,document.readyState==="loading"?document.addEventListener("DOMContentLoaded",()=>{document.head.appendChild(t)}):(document.head||document.documentElement).appendChild(t)),t.textContent=ot}function rt(a){return t=>{const e=new v(t,a),n=new G(t,e);return e.option.heatmap&&st(t,e,e.option.heatmap),{name:"artplayerPluginDanmuku",emit:e.emit.bind(e),load:e.load.bind(e),config:e.config.bind(e),hide:e.hide.bind(e),show:e.show.bind(e),reset:e.reset.bind(e),mount:n.mount.bind(n),get option(){return e.option},get isHide(){return e.isHide},get isStop(){return e.isStop}}}}rt.icons=G.icons;export{rt as default};

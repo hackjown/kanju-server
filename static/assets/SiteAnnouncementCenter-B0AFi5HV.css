@@ -1,0 +1,1 @@
+.site-announcement-viewport{--site-announcement-viewport-offset-top:0px;box-sizing:border-box;padding-top:max(0px,calc(var(--app-safe-area-top) - var(--site-announcement-viewport-offset-top)))}@media(min-width:768px){.site-announcement-viewport{padding:1.5rem}}
