@@ -14,25 +14,32 @@
   const MP4BOX_URL = 'https://cdn.jsdelivr.net/npm/mp4box@0.5.4/dist/mp4box.all.min.js';
   const FFMPEG_CDN_SOURCES = [
     {
+      name: '车机本地同源核心 (无外网依赖/零跨域错误)',
+      moduleUrl: '/static/ffmpeg/index.js',
+      workerUrl: '/static/ffmpeg/worker.js',
+      coreJs: '/static/ffmpeg/ffmpeg-core.js',
+      coreWasm: '/static/ffmpeg/ffmpeg-core.wasm'
+    },
+    {
       name: '阿里云 npmmirror (国内极速源)',
       moduleUrl: 'https://registry.npmmirror.com/@ffmpeg/ffmpeg/0.12.10/files/dist/esm/index.js',
-      utilUrl: 'https://registry.npmmirror.com/@ffmpeg/util/0.12.1/files/dist/esm/index.js',
+      workerUrl: 'https://registry.npmmirror.com/@ffmpeg/ffmpeg/0.12.10/files/dist/esm/worker.js',
       coreJs: 'https://registry.npmmirror.com/@ffmpeg/core/0.12.6/files/dist/umd/ffmpeg-core.js',
       coreWasm: 'https://registry.npmmirror.com/@ffmpeg/core/0.12.6/files/dist/umd/ffmpeg-core.wasm'
     },
     {
-      name: 'unpkg 公共镜像',
-      moduleUrl: 'https://unpkg.com/@ffmpeg/ffmpeg@0.12.10/dist/esm/index.js',
-      utilUrl: 'https://unpkg.com/@ffmpeg/util@0.12.1/dist/esm/index.js',
-      coreJs: 'https://unpkg.com/@ffmpeg/core@0.12.6/dist/umd/ffmpeg-core.js',
-      coreWasm: 'https://unpkg.com/@ffmpeg/core@0.12.6/dist/umd/ffmpeg-core.wasm'
-    },
-    {
       name: 'jsdelivr 公共源',
       moduleUrl: 'https://cdn.jsdelivr.net/npm/@ffmpeg/ffmpeg@0.12.10/dist/esm/index.js',
-      utilUrl: 'https://cdn.jsdelivr.net/npm/@ffmpeg/util@0.12.1/dist/esm/index.js',
+      workerUrl: 'https://cdn.jsdelivr.net/npm/@ffmpeg/ffmpeg@0.12.10/dist/esm/worker.js',
       coreJs: 'https://cdn.jsdelivr.net/npm/@ffmpeg/core@0.12.6/dist/umd/ffmpeg-core.js',
       coreWasm: 'https://cdn.jsdelivr.net/npm/@ffmpeg/core@0.12.6/dist/umd/ffmpeg-core.wasm'
+    },
+    {
+      name: 'unpkg 公共镜像',
+      moduleUrl: 'https://unpkg.com/@ffmpeg/ffmpeg@0.12.10/dist/esm/index.js',
+      workerUrl: 'https://unpkg.com/@ffmpeg/ffmpeg@0.12.10/dist/esm/worker.js',
+      coreJs: 'https://unpkg.com/@ffmpeg/core@0.12.6/dist/umd/ffmpeg-core.js',
+      coreWasm: 'https://unpkg.com/@ffmpeg/core@0.12.6/dist/umd/ffmpeg-core.wasm'
     }
   ];
 
@@ -904,8 +911,22 @@ registerProcessor('pcm-ring-buffer-processor', PcmRingBufferProcessor);
               status(`WASM 核心下载中${pctText} (${mb}MB)…`, 'wasm');
             }
           });
+          // 核心修复：解决浏览器跨域 Worker 构造限制 (Failed to construct 'Worker')
+          let classWorkerURL = undefined;
+          if (src.workerUrl) {
+            if (src.workerUrl.startsWith('/') || (typeof location !== 'undefined' && src.workerUrl.startsWith(location.origin))) {
+              classWorkerURL = src.workerUrl;
+            } else {
+              // 跨域 CDN 场景：用同源 Blob 包装 import 语句，彻底规避跨域 Worker 构造异常
+              const workerBlob = new Blob([`import "${src.workerUrl}";`], { type: 'text/javascript' });
+              classWorkerURL = URL.createObjectURL(workerBlob);
+            }
+          }
+
           status('正在初始化 WASM 运行时…', 'wasm');
-          await ffmpeg.load({ coreURL, wasmURL });
+          const loadOptions = { coreURL, wasmURL };
+          if (classWorkerURL) loadOptions.classWorkerURL = classWorkerURL;
+          await ffmpeg.load(loadOptions);
           state.ffmpeg = ffmpeg;
           console.log(`[CarMedia] FFmpeg.wasm 核心加载就绪，来源: ${src.name}`);
           return ffmpeg;
