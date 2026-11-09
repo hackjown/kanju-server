@@ -806,8 +806,9 @@ registerProcessor('pcm-ring-buffer-processor', PcmRingBufferProcessor);
     status('WASM 逐帧软解与 PCM 抽取中…', 'wasm');
 
     // 1. 抽取音频至 Float32 PCM (48kHz, 双声道)
+    const maxDecodeSec = 20; // 限制单次逐帧软解安全窗口，杜绝原始未压缩像素撑爆 Emscripten 2GB 内存
     try {
-      await ffmpeg.exec(['-i', 'source.mp4', '-vn', '-f', 'f32le', '-ac', '2', '-ar', '48000', 'audio.pcm']);
+      await ffmpeg.exec(['-t', String(maxDecodeSec), '-i', 'source.mp4', '-vn', '-f', 'f32le', '-ac', '2', '-ar', '48000', 'audio.pcm']);
       const pcmRaw = await ffmpeg.readFile('audio.pcm');
       if (pcmRaw && pcmRaw.byteLength > 0) {
         const floatView = new Float32Array(pcmRaw.buffer, pcmRaw.byteOffset, pcmRaw.byteLength / 4);
@@ -831,6 +832,7 @@ registerProcessor('pcm-ring-buffer-processor', PcmRingBufferProcessor);
     // 2. 逐帧解码视频至 rawvideo RGBA (标准 1280x720，软件解码最均衡的 60fps 分辨率)
     const targetW = 1280, targetH = 720;
     await ffmpeg.exec([
+      '-t', String(maxDecodeSec),
       '-i', 'source.mp4',
       '-an',
       '-f', 'rawvideo',
