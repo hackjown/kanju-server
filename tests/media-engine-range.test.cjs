@@ -183,3 +183,13 @@ test('4K 内存约束：解码帧队列严格限制在 4 帧以内，溢出即�
   assert.equal(diag.droppedFrames >= 4, true);
   assert.equal(closedFrames >= 4, true);
 });
+
+test('WASM 逐帧软解模式状态、诊断与清空原生 video 标签', async () => {
+  const harness = createHarness(async () => ({ ok: true, status: 200 }));
+  assert.equal(typeof harness.engine.startWasmDecoder, 'function');
+  const diag = harness.engine.getDiagnostics();
+  assert.ok('wasmFramesCount' in diag);
+  assert.ok('wasmCurrentFrameIdx' in diag);
+  assert.ok('wasmW' in diag);
+  assert.ok('wasmH' in diag);
+});

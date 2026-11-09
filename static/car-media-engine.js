@@ -535,7 +535,14 @@ registerProcessor('pcm-ring-buffer-processor', PcmRingBufferProcessor);
         }
       } else if (state.mode === 'wasm' && state.wasmFrames) {
         // WASM 逐帧软解输出循环
-        const curSec = getCurrentTime();
+        let curSec = getCurrentTime();
+        if (state.duration > 0 && curSec >= state.duration) {
+          // 循环回放以供持续观测测试
+          state.clockStartPerf = getNowMs();
+          state.clockStartSec = 0;
+          state.wasmFrameIdx = -1;
+          curSec = 0;
+        }
         const fps = 25;
         const frameIdx = Math.min(state.wasmFrames.length - 1, Math.max(0, Math.floor(curSec * fps)));
         if (frameIdx !== state.wasmFrameIdx && state.wasmFrames[frameIdx]) {
@@ -551,6 +558,8 @@ registerProcessor('pcm-ring-buffer-processor', PcmRingBufferProcessor);
               bmp.close();
             }).catch(() => {});
           }
+          const decEl = document.getElementById('stat-decoder');
+          if (decEl) decEl.textContent = `FFmpeg.wasm 软解 (第 ${frameIdx + 1}/${state.wasmFrames.length} 帧 RGBA)`;
         }
       }
 
@@ -865,7 +874,19 @@ registerProcessor('pcm-ring-buffer-processor', PcmRingBufferProcessor);
     canvas.height = targetH;
     if (glRenderer.resize) glRenderer.resize(targetW, targetH);
 
+    // 确保隐藏 video 元素彻底清空且暂停，杜绝任何原生解码器抢占资源
+    const vid = state.masterVideo || document.getElementById('hidden-video') || (typeof document !== 'undefined' ? document.querySelector('video') : null);
+    if (vid) {
+      try {
+        if (typeof vid.pause === 'function') vid.pause();
+        if (typeof vid.removeAttribute === 'function') vid.removeAttribute('src');
+        else vid.src = '';
+        if (typeof vid.load === 'function') vid.load();
+      } catch (_) {}
+    }
+
     status('FFmpeg.wasm 逐帧软解 (RGBA ➔ Canvas/WebGL + WebAudio PCM)', 'wasm');
+    console.log(`[CarMedia] FFmpeg.wasm 逐帧软解就绪: ${totalFrames} 帧 rawvideo RGBA (${targetW}x${targetH}) ➔ Canvas/WebGL`);
     startClock(canvas, glRenderer, generation);
     return true;
   }
@@ -973,6 +994,10 @@ registerProcessor('pcm-ring-buffer-processor', PcmRingBufferProcessor);
       rangeRequests: state.rangeRequests,
       bytesFetched: state.bytesFetched,
       inputStrategy: state.rangeSupported === true ? 'http-range' : state.rangeSupported === false ? 'stream-fallback' : 'unknown',
+      wasmFramesCount: state.wasmFrames ? state.wasmFrames.length : 0,
+      wasmCurrentFrameIdx: state.wasmFrameIdx,
+      wasmW: state.wasmW,
+      wasmH: state.wasmH,
       error: state.error
     };
   }
