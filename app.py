@@ -1395,7 +1395,11 @@ def api_home_rails():
 def car_page(p=None):
     if request.args.get("legacy") == "1":
         return send_from_directory(os.path.join(HERE, "static"), "tesla.html")
-    return send_from_directory(os.path.join(HERE, "static"), "car.html")
+    resp = make_response(send_from_directory(os.path.join(HERE, "static"), "car.html"))
+    resp.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+    resp.headers["Pragma"] = "no-cache"
+    resp.headers["Expires"] = "0"
+    return resp
 
 
 @app.route("/api/p2p/config")

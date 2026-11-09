@@ -12,6 +12,10 @@ services:
       - ./kanju.db:/app/kanju.db
       - ./kanju_upstream.json:/app/kanju_upstream.json
       - ./cache:/app/cache
+      - ./static:/app/static
+      - ./seeds:/app/seeds
+      - ./app.py:/app/app.py
+      - ./kanju_pan.py:/app/kanju_pan.py
     environment:
       - TZ=Asia/Shanghai
     dns:
