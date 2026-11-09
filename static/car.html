@@ -6,6 +6,7 @@
   <meta name="referrer" content="no-referrer"/>
   <title>看剧AI · 极速车机版 (Canvas + WebAudio)</title>
   <script src="/static/hls.min.js"></script>
+  <script src="/static/car-media-engine.js"></script>
   <style>
     :root {
       --bg-black: #000000;
@@ -599,10 +600,10 @@
         <!-- 技术监控监视器 -->
         <div class="hud-tech-monitor">
           <span>渲染: <strong id="stat-renderer">WebGL 2.0</strong></span>
-          <span>解码: <strong id="stat-decoder">WebCodecs (4K)</strong></span>
+          <span>解码: <strong id="stat-decoder">检测中…</strong></span>
           <span>色彩: <strong id="stat-colormode">杜比/HDR校色</strong></span>
           <span>帧率: <strong id="stat-fps">60.0 FPS</strong></span>
-          <span>音频: <strong id="stat-audio">WebAudio 48kHz</strong></span>
+          <span>音频: <strong id="stat-audio">WebAudio 待启动</strong></span>
         </div>
       </div>
 
@@ -768,7 +769,9 @@
     // 帧率统计
     let frameCount = 0;
     let lastFpsTs = performance.now();
-    let currentFps = 60.0;
+    let currentFps = 0.0;
+    let renderLoopStarted = false;
+    if (window.CarMediaEngine) window.CarMediaEngine.status('等待媒体源', 'idle');
 
     function initCanvasRenderer() {
       try {
@@ -783,7 +786,7 @@
       } else {
         isWebGl = false;
         ctx2d = canvas.getContext('2d');
-        document.getElementById('stat-renderer').innerText = 'Canvas 2D 软解';
+        document.getElementById('stat-renderer').innerText = 'Canvas 2D';
       }
     }
 
@@ -906,33 +909,67 @@
       uContrastLoc = gl.getUniformLocation(glProgram, 'uContrast');
     }
 
-    // 逐帧渲染主循环
-    function renderFrameLoop() {
-      if (!video.paused && !video.ended && video.readyState >= 2) {
-        // 自适应调整画布像素比
-        if (canvas.width !== video.videoWidth || canvas.height !== video.videoHeight) {
-          if (video.videoWidth > 0 && video.videoHeight > 0) {
-            canvas.width = video.videoWidth;
-            canvas.height = video.videoHeight;
-            if (isWebGl && gl) {
-              gl.viewport(0, 0, canvas.width, canvas.height);
-            }
-          }
-        }
-
+    // 给独立 WebCodecs 引擎使用的统一帧渲染接口（VideoFrame / HTMLVideoElement 均可作为纹理源）。
+    const carFrameRenderer = {
+      resize(width, height) {
+        if (isWebGl && gl) gl.viewport(0, 0, width, height);
+      },
+      draw(frameSource) {
         if (isWebGl && gl && glProgram) {
           gl.bindTexture(gl.TEXTURE_2D, glTex);
-          gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, video);
+          gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, frameSource);
           gl.uniform1i(uColorModeLoc, activeColorMode);
           gl.uniform1f(uBrightnessLoc, userBrightness);
           gl.uniform1f(uContrastLoc, userContrast);
           gl.drawArrays(gl.TRIANGLES, 0, 6);
         } else if (ctx2d) {
-          ctx2d.drawImage(video, 0, 0, canvas.width, canvas.height);
+          ctx2d.drawImage(frameSource, 0, 0, canvas.width, canvas.height);
+        }
+      },
+      drawRgba(pixels, width, height) {
+        if (isWebGl && gl && glProgram) {
+          gl.bindTexture(gl.TEXTURE_2D, glTex);
+          gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, width, height, 0, gl.RGBA, gl.UNSIGNED_BYTE, pixels);
+          gl.uniform1i(uColorModeLoc, activeColorMode);
+          gl.uniform1f(uBrightnessLoc, userBrightness);
+          gl.uniform1f(uContrastLoc, userContrast);
+          gl.drawArrays(gl.TRIANGLES, 0, 6);
+        } else if (ctx2d) {
+          const imgData = new ImageData(new Uint8ClampedArray(pixels.buffer, pixels.byteOffset, pixels.byteLength), width, height);
+          ctx2d.putImageData(imgData, 0, 0);
+        }
+      }
+    };
+
+    // 逐帧渲染主循环
+    function renderFrameLoop() {
+      if (renderLoopStarted) return;
+      renderLoopStarted = true;
+      const tick = () => {
+        const isEngineActive = window.CarMediaEngine && (window.CarMediaEngine.mode === 'webcodecs' || window.CarMediaEngine.mode === 'wasm');
+
+        if (isEngineActive) {
+          // 自主解码引擎模式：Virtual Timeline 驱动进度与统计
+          updateProgress();
+          frameCount++;
+        } else if (!video.paused && !video.ended && video.readyState >= 2) {
+          // 自适应调整画布像素比
+          if (canvas.width !== video.videoWidth || canvas.height !== video.videoHeight) {
+            if (video.videoWidth > 0 && video.videoHeight > 0) {
+              canvas.width = video.videoWidth;
+              canvas.height = video.videoHeight;
+              if (isWebGl && gl) {
+                gl.viewport(0, 0, canvas.width, canvas.height);
+              }
+            }
+          }
+
+          carFrameRenderer.draw(video);
+          updateProgress();
+          frameCount++;
         }
 
         // 计算实时 FPS
-        frameCount++;
         const now = performance.now();
         if (now - lastFpsTs >= 1000) {
           currentFps = (frameCount * 1000 / (now - lastFpsTs)).toFixed(1);
@@ -942,16 +979,14 @@
           if (fpsEl) fpsEl.innerText = `${currentFps} FPS`;
         }
 
-        // 更新进度条
-        updateProgress();
-      }
-
-      // 请求下一帧
-      if ('requestVideoFrameCallback' in video) {
-        video.requestVideoFrameCallback(renderFrameLoop);
-      } else {
-        requestAnimationFrame(renderFrameLoop);
-      }
+        // 请求下一帧
+        if (!isEngineActive && 'requestVideoFrameCallback' in video && !video.paused) {
+          video.requestVideoFrameCallback(tick);
+        } else {
+          requestAnimationFrame(tick);
+        }
+      };
+      tick();
     }
 
     // ========================================================
@@ -1004,13 +1039,15 @@
 
       // 链路串接: Source -> Bass -> Vocal -> Treble -> Gain -> Analyser -> Output
       audioSourceNode.connect(bassFilter);
+      // 独立 AudioDecoder 的 PCM 也进入同一套车载 DSP 链，避免重复创建音效图。
+      if (window.CarMediaEngine) window.CarMediaEngine.connectAudioContext(audioCtx, bassFilter);
       bassFilter.connect(vocalFilter);
       vocalFilter.connect(trebleFilter);
       trebleFilter.connect(masterGain);
       masterGain.connect(analyserNode);
       analyserNode.connect(audioCtx.destination);
 
-      document.getElementById('stat-audio').innerText = `WebAudio ${audioCtx.sampleRate/1000}kHz (DSP)`;
+      document.getElementById('stat-audio').innerText = `WebAudio ${audioCtx.sampleRate/1000}kHz (PCM/DSP)`;
       renderSpectrumLoop();
     }
 
@@ -1219,11 +1256,54 @@
     // ========================================================
     // 6. 播放器核心控制逻辑 (换线、选集、倍速、解析)
     // ========================================================
+    function getMediaCurrentTime() {
+      if (window.CarMediaEngine && window.CarMediaEngine.mode !== 'native' && window.CarMediaEngine.mode !== 'idle') {
+        return window.CarMediaEngine.currentTime;
+      }
+      return video.currentTime || 0;
+    }
+
+    function getMediaDuration() {
+      if (window.CarMediaEngine && window.CarMediaEngine.mode !== 'native' && window.CarMediaEngine.mode !== 'idle' && window.CarMediaEngine.duration > 0) {
+        return window.CarMediaEngine.duration;
+      }
+      return video.duration || 0;
+    }
+
+    function isMediaPaused() {
+      if (window.CarMediaEngine && window.CarMediaEngine.mode !== 'native' && window.CarMediaEngine.mode !== 'idle') {
+        return window.CarMediaEngine.paused;
+      }
+      return video.paused;
+    }
+
+    function seekMedia(sec) {
+      if (window.CarMediaEngine && window.CarMediaEngine.mode !== 'native' && window.CarMediaEngine.mode !== 'idle') {
+        window.CarMediaEngine.seekTo(sec);
+      } else {
+        video.currentTime = sec;
+      }
+    }
+
     function togglePlayPause() {
       if (!audioCtx) initWebAudio();
       if (audioCtx && audioCtx.state === 'suspended') audioCtx.resume();
 
       const btn = document.getElementById('btn-play-toggle');
+      if (window.CarMediaEngine && window.CarMediaEngine.mode !== 'native' && window.CarMediaEngine.mode !== 'idle') {
+        if (window.CarMediaEngine.paused) {
+          window.CarMediaEngine.play();
+          btn.innerText = '⏸ 暂停';
+          btn.classList.add('primary');
+        } else {
+          window.CarMediaEngine.pause();
+          btn.innerText = '▶ 播放';
+          btn.classList.remove('primary');
+        }
+        resetOverlayTimer();
+        return;
+      }
+
       if (video.paused) {
         video.play().catch(e => console.warn(e));
         btn.innerText = '⏸ 暂停';
@@ -1237,27 +1317,34 @@
     }
 
     function seekRelative(sec) {
-      if (!video.duration) return;
-      video.currentTime = Math.max(0, Math.min(video.duration, video.currentTime + sec));
+      const dur = getMediaDuration();
+      if (!dur) return;
+      const cur = getMediaCurrentTime();
+      const target = Math.max(0, Math.min(dur, cur + sec));
+      seekMedia(target);
       updateProgress();
-      showGestureHud(sec > 0 ? '⏩' : '⏪', `${sec > 0 ? '+' : ''}${sec}s`, video.currentTime / video.duration);
+      showGestureHud(sec > 0 ? '⏩' : '⏪', `${sec > 0 ? '+' : ''}${sec}s`, target / dur);
     }
 
     function seekByClick(e) {
       const rect = document.getElementById('progress-bar').getBoundingClientRect();
       const pos = (e.clientX - rect.left) / rect.width;
-      if (video.duration) {
-        video.currentTime = pos * video.duration;
+      const dur = getMediaDuration();
+      if (dur) {
+        const target = pos * dur;
+        seekMedia(target);
         updateProgress();
       }
     }
 
     function updateProgress() {
-      if (!video.duration) return;
-      const pct = (video.currentTime / video.duration) * 100;
+      const dur = getMediaDuration();
+      if (!dur) return;
+      const cur = getMediaCurrentTime();
+      const pct = (cur / dur) * 100;
       document.getElementById('progress-fill').style.width = pct + '%';
-      document.getElementById('disp-cur-time').innerText = formatTime(video.currentTime);
-      document.getElementById('disp-dur-time').innerText = formatTime(video.duration);
+      document.getElementById('disp-cur-time').innerText = formatTime(cur);
+      document.getElementById('disp-dur-time').innerText = formatTime(dur);
     }
 
     function formatTime(s) {
@@ -1273,6 +1360,7 @@
       speedIdx = (speedIdx + 1) % speeds.length;
       const spd = speeds[speedIdx];
       video.playbackRate = spd;
+      if (window.CarMediaEngine) window.CarMediaEngine.setPlaybackRate(spd);
       document.getElementById('btn-speed').innerText = spd + 'x';
       showGestureHud('⚡', `倍速 ${spd}x`, spd / 2.0);
     }
@@ -1285,26 +1373,66 @@
       }
     }
 
-    // 播放指定直链 (支持 HLS m3u8 与 原画 mp4)
-    function playMediaSource(url) {
+    // 播放入口：HLS 原生兼容；MP4 优先 JS 解复用 + WebCodecs；失败时 FFmpeg.wasm；最后回退浏览器原生。
+    async function playMediaSource(url) {
       initWebAudio();
+      if (window.CarMediaEngine) window.CarMediaEngine.stop();
+      if (video.dataset.wasmObjectUrl) {
+        URL.revokeObjectURL(video.dataset.wasmObjectUrl);
+        delete video.dataset.wasmObjectUrl;
+      }
       if (hlsInstance) {
         hlsInstance.destroy();
         hlsInstance = null;
       }
+      video.pause();
+      video.removeAttribute('src');
+      video.load();
 
-      if (url.includes('.m3u8') && Hls.isSupported()) {
-        hlsInstance = new Hls({ maxBufferLength: 30, enableWorker: true });
-        hlsInstance.loadSource(url);
-        hlsInstance.attachMedia(video);
-        hlsInstance.on(Hls.Events.MANIFEST_PARSED, () => {
-          video.play().catch(() => {});
-          document.getElementById('stat-decoder').innerText = 'HLS.js / WebCodecs';
-        });
+      let decodedHint = url;
+      try { decodedHint = decodeURIComponent(url); } catch (_) {}
+      const isHls = /\.m3u8(?:$|[?#&])/i.test(decodedHint);
+      if (isHls) {
+        if (window.Hls && Hls.isSupported()) {
+          hlsInstance = new Hls({ maxBufferLength: 30, enableWorker: true });
+          hlsInstance.loadSource(url);
+          hlsInstance.attachMedia(video);
+          hlsInstance.on(Hls.Events.MANIFEST_PARSED, () => {
+            video.play().catch(e => console.warn('[Car] HLS autoplay:', e));
+            if (window.CarMediaEngine) window.CarMediaEngine.status('HLS.js + 浏览器解码（兼容模式）', 'native');
+          });
+          hlsInstance.on(Hls.Events.ERROR, (_event, data) => {
+            if (data && data.fatal) console.error('[Car] HLS fatal error:', data);
+          });
+        } else {
+          video.src = url;
+          video.play().catch(e => console.warn('[Car] native HLS autoplay:', e));
+          if (window.CarMediaEngine) window.CarMediaEngine.status('原生 HLS 解码（兼容模式）', 'native');
+        }
       } else {
-        video.src = url;
-        video.play().catch(() => {});
-        document.getElementById('stat-decoder').innerText = '4K 原画直链 (HEVC)';
+        let started = false;
+        // WebCodecs 优先；硬件不支持时自动转入 FFmpeg.wasm 逐帧软解 (RGBA ➔ WebGL)；最后回退原生。
+        if (/\.(mp4|m4v|mov)(?:$|[?#&])/i.test(decodedHint) && window.CarMediaEngine) {
+          try {
+            await window.CarMediaEngine.startWebCodecs(url, video, canvas, carFrameRenderer);
+            started = true;
+          } catch (e) {
+            console.warn('[Car] WebCodecs path unavailable, trying WASM:', e);
+            window.CarMediaEngine.stop();
+            try {
+              await window.CarMediaEngine.startWasmDecoder(url, canvas, carFrameRenderer);
+              started = true;
+            } catch (wasmError) {
+              console.warn('[Car] FFmpeg.wasm fallback unavailable:', wasmError);
+            }
+          }
+        }
+        if (!started) {
+          video.src = url;
+          video.load();
+          video.play().catch(e => console.warn('[Car] native playback:', e));
+          if (window.CarMediaEngine) window.CarMediaEngine.status('浏览器原生解码（兼容回退）', 'native');
+        }
       }
       resetOverlayTimer();
     }
@@ -1456,6 +1584,8 @@
     }
 
     function closePlayer() {
+      if (window.CarMediaEngine) window.CarMediaEngine.stop();
+      if (video.dataset.wasmObjectUrl) { URL.revokeObjectURL(video.dataset.wasmObjectUrl); delete video.dataset.wasmObjectUrl; }
       video.pause();
       if (hlsInstance) { hlsInstance.destroy(); hlsInstance = null; }
       document.getElementById('player-view').style.display = 'none';
@@ -1561,10 +1691,12 @@
         const movieSec = sections.find(s => (s.title || '').includes('电影')) || (sections.length > 5 ? sections[5] : null);
         if (movieSec) {
           const movieGrid = document.getElementById('movie-grid');
-          movieGrid.innerHTML = '';
-          (movieSec.cards || []).slice(0, 18).forEach(item => {
-            if (!isJunkOrSport(item)) movieGrid.appendChild(createCarCard(item));
-          });
+          if (movieGrid) {
+            movieGrid.innerHTML = '';
+            (movieSec.cards || []).slice(0, 18).forEach(item => {
+              if (!isJunkOrSport(item)) movieGrid.appendChild(createCarCard(item));
+            });
+          }
         }
       } catch (e) {
         console.warn('[Car] loadHome sections failed:', e);
