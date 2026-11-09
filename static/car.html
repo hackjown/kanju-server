@@ -110,22 +110,25 @@
       letter-spacing: 1px;
     }
 
-    /* 车机大按钮基础规范 (防抖、易点) */
+    /* 车机按钮基础规范 (紧凑防抖、易触控、自适应车载分屏) */
     .btn-car {
       display: inline-flex;
       align-items: center;
       justify-content: center;
-      gap: 8px;
+      gap: 6px;
       background: var(--bg-surface-elevated);
       border: 2px solid var(--border-dark);
       color: var(--text-main);
-      border-radius: 14px;
-      padding: 14px 22px;
-      font-size: 18px;
+      border-radius: 10px;
+      padding: 10px 16px;
+      font-size: 15px;
       font-weight: 700;
       cursor: pointer;
       transition: all 0.15s ease-out;
       outline: none;
+      white-space: nowrap;
+      user-select: none;
+      flex-shrink: 0;
     }
     .btn-car:active {
       transform: scale(0.96);
@@ -190,14 +193,14 @@
       z-index: -9999;
     }
 
-    /* 浮动 HUD 交互层 */
+    /* 浮动 HUD 交互层 (紧凑边距，半屏不挤压，播放自动淡出) */
     .player-overlay {
       position: absolute;
       inset: 0;
       display: flex;
       flex-direction: column;
       justify-content: space-between;
-      padding: 24px 32px;
+      padding: 14px 20px;
       background: linear-gradient(180deg, rgba(0,0,0,0.85) 0%, rgba(0,0,0,0) 25%, rgba(0,0,0,0) 65%, rgba(0,0,0,0.92) 100%);
       opacity: 1;
       transition: opacity 0.3s ease;
@@ -213,35 +216,43 @@
       display: flex;
       align-items: center;
       justify-content: space-between;
+      gap: 10px;
     }
     .hud-title-group {
       display: flex;
       align-items: center;
-      gap: 16px;
+      gap: 12px;
+      min-width: 0;
+      overflow: hidden;
     }
     .hud-movie-title {
-      font-size: 26px;
+      font-size: 22px;
       font-weight: 800;
       color: #fff;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
     }
     .hud-ep-title {
-      font-size: 20px;
+      font-size: 17px;
       color: var(--accent-cyan);
       font-weight: 700;
+      white-space: nowrap;
     }
 
     /* 实时技术统计监视器 HUD */
     .hud-tech-monitor {
       background: rgba(10, 14, 22, 0.75);
       border: 1px solid rgba(0, 229, 255, 0.3);
-      padding: 8px 16px;
-      border-radius: 10px;
-      font-size: 13px;
+      padding: 6px 12px;
+      border-radius: 8px;
+      font-size: 12px;
       font-family: monospace, var(--font-car);
       color: #cbd5e1;
       display: flex;
-      gap: 14px;
+      gap: 10px;
       backdrop-filter: blur(8px);
+      white-space: nowrap;
     }
     .hud-tech-monitor span strong {
       color: var(--accent-cyan);
@@ -336,17 +347,74 @@
       opacity: 0.6;
     }
 
-    /* 大按钮控制栏 */
+    /* 控制栏自适应规范 (半屏双行紧凑流式排列，永不溢出截断) */
     .controls-row {
       display: flex;
       align-items: center;
       justify-content: space-between;
-      gap: 12px;
+      gap: 8px;
+      flex-wrap: wrap;
     }
     .controls-left, .controls-right {
       display: flex;
       align-items: center;
-      gap: 12px;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+
+    /* 车载分屏 / 半屏 / 狭窄视口响应式规范 */
+    @media (max-width: 960px), (max-height: 620px) {
+      .btn-car {
+        padding: 7px 11px;
+        font-size: 13px;
+        border-radius: 8px;
+        gap: 4px;
+      }
+      .player-overlay {
+        padding: 8px 12px;
+      }
+      .hud-movie-title {
+        font-size: 17px;
+        max-width: 160px;
+      }
+      .hud-ep-title {
+        font-size: 14px;
+      }
+      .hud-tech-monitor {
+        font-size: 11px;
+        padding: 4px 8px;
+        gap: 6px;
+      }
+      .time-badge {
+        font-size: 13px;
+        min-width: 44px;
+      }
+      .controls-row {
+        gap: 6px;
+      }
+      .controls-left, .controls-right {
+        gap: 6px;
+      }
+      #btn-play-toggle {
+        min-width: 80px !important;
+      }
+    }
+
+    @media (max-width: 720px) {
+      .btn-car {
+        padding: 6px 8px;
+        font-size: 12px;
+      }
+      .hud-movie-title {
+        font-size: 15px;
+        max-width: 100px;
+      }
+      .hud-tech-monitor {
+        display: none !important;
+      }
+      #btn-play-toggle {
+        min-width: 70px !important;
+      }
     }
 
     /* 弹出的车机面板 (线路 / 选集 / 车载调音 / 杜比校色) */
@@ -604,18 +672,22 @@
       <!-- 顶部信息栏 -->
       <div class="hud-top-bar">
         <div class="hud-title-group">
-          <button class="btn-car" onclick="closePlayer()" style="padding: 10px 18px;">← 退出影院</button>
+          <button class="btn-car" onclick="closePlayer()" style="padding: 7px 12px; font-size: 13px;">← 退出影院</button>
           <div class="hud-movie-title" id="disp-movie-title">载入中...</div>
           <div class="hud-ep-title" id="disp-ep-title">正片</div>
         </div>
 
-        <!-- 技术监控监视器 -->
-        <div class="hud-tech-monitor">
-          <span>渲染: <strong id="stat-renderer">WebGL 2.0</strong></span>
-          <span>解码: <strong id="stat-decoder">检测中…</strong></span>
-          <span>色彩: <strong id="stat-colormode">杜比/HDR校色</strong></span>
-          <span>帧率: <strong id="stat-fps">60.0 FPS</strong></span>
-          <span>音频: <strong id="stat-audio">WebAudio 待启动</strong></span>
+        <div style="display: flex; align-items: center; gap: 8px;">
+          <!-- 技术监控监视器 -->
+          <div class="hud-tech-monitor">
+            <span>渲染: <strong id="stat-renderer">WebGL 2.0</strong></span>
+            <span>解码: <strong id="stat-decoder">检测中…</strong></span>
+            <span>色彩: <strong id="stat-colormode">杜比/HDR校色</strong></span>
+            <span>帧率: <strong id="stat-fps">60.0 FPS</strong></span>
+            <span>音频: <strong id="stat-audio">WebAudio 待启动</strong></span>
+          </div>
+          <!-- 顶栏专属全屏快捷按钮：分屏模式下永不被挤压，一触即大！ -->
+          <button class="btn-car primary" id="btn-top-fullscreen" onclick="toggleFullscreen()" style="padding: 7px 12px; font-size: 13px;" title="进入/退出全屏">⛶ 全屏</button>
         </div>
       </div>
 
@@ -633,19 +705,19 @@
           <span class="time-badge" id="disp-dur-time">00:00</span>
         </div>
 
-        <!-- 大按钮控制行 -->
+        <!-- 紧凑控制行 (自适应半屏排布) -->
         <div class="controls-row">
           <div class="controls-left">
             <button class="btn-car" onclick="prevEpisode()">⏮ 上一集</button>
             <button class="btn-car" onclick="seekRelative(-15)">⏪ -15s</button>
-            <button class="btn-car primary" id="btn-play-toggle" onclick="togglePlayPause()" style="min-width: 120px;">⏸ 暂停</button>
+            <button class="btn-car primary" id="btn-play-toggle" onclick="togglePlayPause()" style="min-width: 100px;">⏸ 暂停</button>
             <button class="btn-car" onclick="seekRelative(15)">⏩ +15s</button>
             <button class="btn-car" onclick="nextEpisode()">⏭ 下一集</button>
           </div>
 
           <div class="controls-right">
             <!-- 线路选择 -->
-            <button class="btn-car gold" onclick="openDrawer('drawer-lines')">⚡ 线路 (<span id="btn-line-name">4K专线</span>)</button>
+            <button class="btn-car gold" onclick="openDrawer('drawer-lines')" style="max-width: 140px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">⚡ <span id="btn-line-name">4K专线</span></button>
             <!-- 选集 -->
             <button class="btn-car" onclick="openDrawer('drawer-eps')">📑 选集</button>
             <!-- 引擎与软解实测 -->
@@ -1334,10 +1406,10 @@
     function resetOverlayTimer() {
       clearTimeout(overlayTimer);
       overlayTimer = setTimeout(() => {
-        if (!video.paused) {
+        if (!isMediaPaused()) {
           document.getElementById('player-overlay').classList.add('hidden');
         }
-      }, 4500);
+      }, 3500);
     }
 
     // ========================================================
@@ -1767,7 +1839,10 @@
     }
 
     function applyLinePlay(line) {
-      document.getElementById('btn-line-name').innerText = line.label ? line.label.slice(0, 12) : '线路 1';
+      let rawLabel = line.label || '线路 1';
+      // 提取简明名称，剔除括号冗余信息 (如 "量子 4K 资源 ( [4K 蓝光] )" 缩略为 "量子4K")，杜绝垂直挤压折行
+      let shortName = rawLabel.replace(/\s*\(.*?\)/g, '').replace(/\[.*?\]/g, '').replace(/\s+/g, '').slice(0, 6) || '专线';
+      document.getElementById('btn-line-name').innerText = shortName;
       let playUrl = line.url;
       // 检查是否需要代理
       if (playUrl && playUrl.startsWith('http') && !playUrl.includes('127.0.0.1') && !playUrl.includes(location.host)) {
