@@ -1418,13 +1418,15 @@ def up_req(method, path, body=None, extra_headers=None, timeout=20):
     last_status = 502
     last_d = {"ok": False, "error": "上游不可达"}
 
-    for base in candidate_bases:
+    for idx, base in enumerate(candidate_bases):
+        if timeout <= 5 and idx > 0:
+            break
         base, h = _up_headers(method, path, extra=extra_headers)
         h["Origin"] = base
         h["Referer"] = base + "/"
         url = base + path
         try:
-            cur_timeout = 12 if method == "GET" else timeout
+            cur_timeout = min(timeout, 10) if method == "GET" else timeout
             if method == "GET":
                 r = _up_sess.get(url, headers=h, timeout=cur_timeout)
             elif method == "DELETE":
@@ -1765,6 +1767,95 @@ def proxy_v1(subpath):
         resp.status_code = st
         resp.headers["Access-Control-Allow-Origin"] = "*"
         return resp
+
+    # 0. 首页信息流：毫秒级响应 + 本地种子容灾 + 低延迟上游探测（杜绝前端超时）
+    if subpath.startswith("feed/home") and request.method == "GET":
+        cache_file = os.path.join(CACHE_DIR, "home.json")
+        seed_file = os.path.join(HERE, "seeds", "home.json")
+        cached_data = None
+        now_ts = time.time()
+        for fp in [cache_file, seed_file]:
+            if os.path.exists(fp):
+                try:
+                    with open(fp, "r", encoding="utf-8") as f:
+                        d = json.load(f)
+                        if isinstance(d, dict) and d.get("sections"):
+                            cached_data = d
+                            break
+                except Exception:
+                    pass
+
+        # 缓存有效性：若本地缓存存在且新鲜（< 15分钟），直接毫秒级返回
+        is_fresh = False
+        if cached_data and os.path.exists(cache_file):
+            try:
+                if now_ts - os.path.getmtime(cache_file) < 900:
+                    is_fresh = True
+            except Exception:
+                pass
+
+        if cached_data and is_fresh:
+            clean_experience_ads(cached_data)
+            resp = jsonify(cached_data)
+            resp.status_code = 200
+            return resp
+
+        # 否则快速探测上游（4秒超时），成功则持久化，失败立即平滑回退
+        qs = request.query_string.decode("utf-8")
+        full_path = "/v1/" + subpath + (f"?{qs}" if qs else "")
+        st, r = up_req(request.method, full_path, timeout=4)
+        if st == 200 and isinstance(r, dict) and r.get("sections"):
+            clean_experience_ads(r)
+            try:
+                with open(cache_file, "w", encoding="utf-8") as f:
+                    json.dump(r, f, ensure_ascii=False)
+            except Exception:
+                pass
+            resp = jsonify(r)
+            resp.status_code = 200
+            return resp
+
+        if cached_data:
+            clean_experience_ads(cached_data)
+            resp = jsonify(cached_data)
+            resp.status_code = 200
+            return resp
+
+    # 0.1 基础运行时配置：秒级回退
+    if subpath == "runtime/bootstrap" and request.method == "GET":
+        cache_file = os.path.join(CACHE_DIR, "bootstrap.json")
+        seed_file = os.path.join(HERE, "seeds", "bootstrap.json")
+        boot_data = None
+        for fp in [cache_file, seed_file]:
+            if os.path.exists(fp):
+                try:
+                    with open(fp, "r", encoding="utf-8") as f:
+                        d = json.load(f)
+                        if isinstance(d, dict) and d.get("catalog_ui"):
+                            boot_data = d
+                            break
+                except Exception:
+                    pass
+
+        qs = request.query_string.decode("utf-8")
+        full_path = "/v1/" + subpath + (f"?{qs}" if qs else "")
+        st, r = up_req(request.method, full_path, timeout=4)
+        if st == 200 and isinstance(r, dict) and r.get("catalog_ui"):
+            clean_experience_ads(r)
+            try:
+                with open(cache_file, "w", encoding="utf-8") as f:
+                    json.dump(r, f, ensure_ascii=False)
+            except Exception:
+                pass
+            resp = jsonify(r)
+            resp.status_code = 200
+            return resp
+
+        if boot_data:
+            clean_experience_ads(boot_data)
+            resp = jsonify(boot_data)
+            resp.status_code = 200
+            return resp
 
     # ---------------- 原站账号系统本地化（免上游门槛） ----------------
 
