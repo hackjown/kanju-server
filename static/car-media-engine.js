@@ -12,10 +12,29 @@
   'use strict';
 
   const MP4BOX_URL = 'https://cdn.jsdelivr.net/npm/mp4box@0.5.4/dist/mp4box.all.min.js';
-  const FFMPEG_MODULE_URL = 'https://cdn.jsdelivr.net/npm/@ffmpeg/ffmpeg@0.12.10/dist/esm/index.js';
-  const FFMPEG_UTIL_URL = 'https://cdn.jsdelivr.net/npm/@ffmpeg/util@0.12.1/dist/esm/index.js';
-  const FFMPEG_CORE_JS = 'https://cdn.jsdelivr.net/npm/@ffmpeg/core@0.12.6/dist/umd/ffmpeg-core.js';
-  const FFMPEG_CORE_WASM = 'https://cdn.jsdelivr.net/npm/@ffmpeg/core@0.12.6/dist/umd/ffmpeg-core.wasm';
+  const FFMPEG_CDN_SOURCES = [
+    {
+      name: '阿里云 npmmirror (国内极速源)',
+      moduleUrl: 'https://registry.npmmirror.com/@ffmpeg/ffmpeg/0.12.10/files/dist/esm/index.js',
+      utilUrl: 'https://registry.npmmirror.com/@ffmpeg/util/0.12.1/files/dist/esm/index.js',
+      coreJs: 'https://registry.npmmirror.com/@ffmpeg/core/0.12.6/files/dist/umd/ffmpeg-core.js',
+      coreWasm: 'https://registry.npmmirror.com/@ffmpeg/core/0.12.6/files/dist/umd/ffmpeg-core.wasm'
+    },
+    {
+      name: 'unpkg 公共镜像',
+      moduleUrl: 'https://unpkg.com/@ffmpeg/ffmpeg@0.12.10/dist/esm/index.js',
+      utilUrl: 'https://unpkg.com/@ffmpeg/util@0.12.1/dist/esm/index.js',
+      coreJs: 'https://unpkg.com/@ffmpeg/core@0.12.6/dist/umd/ffmpeg-core.js',
+      coreWasm: 'https://unpkg.com/@ffmpeg/core@0.12.6/dist/umd/ffmpeg-core.wasm'
+    },
+    {
+      name: 'jsdelivr 公共源',
+      moduleUrl: 'https://cdn.jsdelivr.net/npm/@ffmpeg/ffmpeg@0.12.10/dist/esm/index.js',
+      utilUrl: 'https://cdn.jsdelivr.net/npm/@ffmpeg/util@0.12.1/dist/esm/index.js',
+      coreJs: 'https://cdn.jsdelivr.net/npm/@ffmpeg/core@0.12.6/dist/umd/ffmpeg-core.js',
+      coreWasm: 'https://cdn.jsdelivr.net/npm/@ffmpeg/core@0.12.6/dist/umd/ffmpeg-core.wasm'
+    }
+  ];
 
   // AudioWorklet PCM 环形缓冲区代码（单例注入，免额外网络依赖）
   const AUDIO_WORKLET_CODE = `
@@ -816,16 +835,37 @@ registerProcessor('pcm-ring-buffer-processor', PcmRingBufferProcessor);
     if (state.ffmpeg) return state.ffmpeg;
     if (state.ffmpegLoading) return state.ffmpegLoading;
     state.ffmpegLoading = (async () => {
-      const [{ FFmpeg }, { toBlobURL }] = await Promise.all([
-        import(FFMPEG_MODULE_URL),
-        import(FFMPEG_UTIL_URL)
-      ]);
-      const ffmpeg = new FFmpeg();
-      const coreURL = await toBlobURL(FFMPEG_CORE_JS, 'text/javascript');
-      const wasmURL = await toBlobURL(FFMPEG_CORE_WASM, 'application/wasm');
-      await ffmpeg.load({ coreURL, wasmURL });
-      state.ffmpeg = ffmpeg;
-      return ffmpeg;
+      let lastError = null;
+      for (const src of FFMPEG_CDN_SOURCES) {
+        try {
+          status(`正在连接 WASM 核心 (${src.name})…`, 'wasm');
+          const [{ FFmpeg }, { toBlobURL }] = await Promise.all([
+            import(src.moduleUrl),
+            import(src.utilUrl)
+          ]);
+          const ffmpeg = new FFmpeg();
+          status(`下载 WASM 核心字节码 (${src.name})…`, 'wasm');
+          const coreURL = await toBlobURL(src.coreJs, 'text/javascript');
+          const wasmURL = await toBlobURL(src.coreWasm, 'application/wasm', true, (progress) => {
+            if (progress && progress.total > 0) {
+              const pct = Math.round((progress.received / progress.total) * 100);
+              const mb = (progress.received / (1024 * 1024)).toFixed(1);
+              const totalMb = (progress.total / (1024 * 1024)).toFixed(1);
+              status(`WASM 核心下载中 ${pct}% (${mb}/${totalMb}MB)…`, 'wasm');
+            }
+          });
+          status('正在初始化 WASM 运行时…', 'wasm');
+          await ffmpeg.load({ coreURL, wasmURL });
+          state.ffmpeg = ffmpeg;
+          console.log(`[CarMedia] FFmpeg.wasm 核心加载就绪，来源: ${src.name}`);
+          return ffmpeg;
+        } catch (e) {
+          console.warn(`[CarMedia] WASM 镜像 ${src.name} 失败:`, e);
+          lastError = e;
+        }
+      }
+      state.ffmpegLoading = null;
+      throw lastError || new Error('所有 WASM 核心下载镜像均不可用，请检查网络连接');
     })();
     return state.ffmpegLoading;
   }

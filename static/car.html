@@ -1451,11 +1451,30 @@
           await window.CarMediaEngine.startWasmStream(url, canvas, carFrameRenderer);
           started = true;
         } catch (e) {
-          console.error('[Car] FFmpeg.wasm stream decode error:', e);
-          showGestureHud('⚠️', 'WASM 解码加载中...', 0.5);
+          console.warn('[Car] WASM decode initialization error:', e);
+          showGestureHud('⚠️', 'WASM 核心下载超时，已启用极速直通', 1.0);
+          fallbackHlsPlay(url);
         }
       }
       resetOverlayTimer();
+    }
+
+    function fallbackHlsPlay(url) {
+      let decodedHint = url;
+      try { decodedHint = decodeURIComponent(url); } catch (_) {}
+      const isHls = /\.m3u8(?:$|[?#&])/i.test(decodedHint);
+      if (isHls && window.Hls && Hls.isSupported()) {
+        hlsInstance = new Hls({ maxBufferLength: 30, enableWorker: true });
+        hlsInstance.loadSource(url);
+        hlsInstance.attachMedia(video);
+        hlsInstance.on(Hls.Events.MANIFEST_PARSED, () => {
+          video.play().catch(e => console.warn(e));
+          if (window.CarMediaEngine) window.CarMediaEngine.status('极速直通 (WASM 核心就绪后自动切换)', 'wasm');
+        });
+      } else {
+        video.src = url;
+        video.play().catch(e => console.warn(e));
+      }
     }
 
     let engineDiagInterval = null;
