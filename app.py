@@ -139,26 +139,60 @@ def pick_base():
 
 def api_get(path, cache_key=None, ttl=600, extra=None):
     base = pick_base()
-    if not base:
-        return None, "上游不可达"
     cf = os.path.join(CACHE_DIR, (cache_key or "x") + ".json")
     if cache_key and os.path.exists(cf) and time.time() - os.path.getmtime(cf) < ttl:
         try:
             return json.load(open(cf, encoding="utf-8")), None
         except Exception:
             pass
+
+    def _seed_fallback():
+        if path.startswith("/v1/feed/home") or cache_key == "home":
+            sfp = os.path.join(HERE, "seeds", "home.json")
+            if os.path.exists(sfp):
+                try: return json.load(open(sfp, encoding="utf-8")), None
+                except Exception: pass
+        if "hot_list_key" in path or "rank" in (cache_key or ""):
+            sfp = os.path.join(HERE, "seeds", "rank_hot.json")
+            if os.path.exists(sfp):
+                try: return json.load(open(sfp, encoding="utf-8")), None
+                except Exception: pass
+        if "bootstrap" in path:
+            sfp = os.path.join(HERE, "seeds", "bootstrap.json")
+            if os.path.exists(sfp):
+                try: return json.load(open(sfp, encoding="utf-8")), None
+                except Exception: pass
+        return None
+
+    if not base:
+        fb = _seed_fallback()
+        if fb: return fb
+        return None, "上游不可达"
+
     try:
         r = signed_get(base, path, extra=extra)
     except Exception as e:
+        fb = _seed_fallback()
+        if fb: return fb
         return None, f"请求失败 {e}"
+
     if r.status_code != 200:
+        fb = _seed_fallback()
+        if fb: return fb
         return None, f"上游 {r.status_code}"
+
     try:
         d = r.json()
     except Exception:
+        fb = _seed_fallback()
+        if fb: return fb
         return None, "上游返回非 JSON"
+
     if cache_key:
-        json.dump(d, open(cf, "w", encoding="utf-8"), ensure_ascii=False)
+        try:
+            json.dump(d, open(cf, "w", encoding="utf-8"), ensure_ascii=False)
+        except Exception:
+            pass
     return d, None
 
 
@@ -618,7 +652,58 @@ def api_resolve_line():
     return jsonify({"ok": False, "error": f"解析失败: {err_msg}"}), 502
 
 
-@app.route("/proxy")
+def proxy_m3u8_directly(u, ref):
+    """就地重写并直出 m3u8 播放列表，零 302 跳转延迟，解决播放器跨域与换源卡顿问题"""
+    import urllib.parse as up
+    pu = up.urlparse(u)
+    h = {
+        "User-Agent": UA,
+        "Accept": "*/*",
+        "Accept-Language": "zh-CN,zh;q=0.9",
+        "Referer": ref,
+        "Origin": ref.rstrip("/"),
+    }
+    if "115.com" in pu.netloc or "115cdn" in pu.netloc or "cpats" in pu.netloc or ref == "https://115.com/":
+        ck_115 = KPAN.get_active_pan_cookie("115")
+        if ck_115:
+            h["Cookie"] = ck_115
+    elif "quark" in pu.netloc or ref == "https://pan.quark.cn/":
+        ck_quark = KPAN.get_active_pan_cookie("quark")
+        if ck_quark:
+            h["Cookie"] = ck_quark
+
+    def wrap(absu, r):
+        return "/proxy?u=" + up.quote(absu, safe="") + "&ref=" + up.quote(r, safe="")
+
+    try:
+        r = _sess.get(u, headers=h, timeout=25, allow_redirects=True)
+    except Exception as e:
+        return "upstream error %s" % e, 502
+
+    if r.status_code != 200:
+        return "upstream %s" % r.status_code, r.status_code
+
+    txt = r.content.decode("utf-8", "ignore")
+    base_url = r.url
+    out = []
+    for line in txt.splitlines():
+        s = line.strip()
+        if not s:
+            continue
+        if s.startswith("#"):
+            def _rw(m):
+                v = m.group(2)
+                if v.startswith("data:"):
+                    return m.group(0)
+                return '%s"%s"' % (m.group(1), wrap(up.urljoin(base_url, v), ref))
+            out.append(re.sub(r'(URI=)"([^"]+)"', _rw, s))
+        else:
+            out.append(wrap(up.urljoin(base_url, s), ref))
+    return Response("\n".join(out), content_type="application/vnd.apple.mpegurl",
+                    headers={"Access-Control-Allow-Origin": "*", "Cache-Control": "no-store"})
+
+
+@app.route("/proxy", methods=["GET", "HEAD"])
 def proxy():
     """转发 m3u8 / 子清单 / TS 分片。支持 Range 分片与流式转发，解决 4K / byte-range 分片播放问题。"""
     import urllib.parse as up
@@ -629,9 +714,6 @@ def proxy():
     if not pu.netloc:
         return "bad u", 400
     ref = request.args.get("ref") or (pu.scheme + "://" + pu.netloc + "/")
-
-    def wrap(absu, r):
-        return "/proxy?u=" + up.quote(absu, safe="") + "&ref=" + up.quote(r, safe="")
 
     h = {
         "User-Agent": UA,
@@ -653,38 +735,32 @@ def proxy():
         if ck_quark:
             h["Cookie"] = ck_quark
 
+    # 支持 HEAD 快速嗅探探针
+    if request.method == "HEAD":
+        try:
+            r = _sess.head(u, headers=h, timeout=15, allow_redirects=True)
+            resp = Response("", status=r.status_code)
+            for fwd in ("Content-Range", "Accept-Ranges", "Content-Length", "Content-Type"):
+                if fwd in r.headers:
+                    resp.headers[fwd] = r.headers[fwd]
+            resp.headers["Access-Control-Allow-Origin"] = "*"
+            resp.headers["Cache-Control"] = "no-store"
+            return resp
+        except Exception:
+            return Response("", status=200, headers={"Access-Control-Allow-Origin": "*"})
+
     is_m3u8_url = ".m3u8" in pu.path or "m3u8" in request.args.get("format", "")
+    if is_m3u8_url:
+        return proxy_m3u8_directly(u, ref)
 
     try:
-        r = _sess.get(u, headers=h, timeout=30, allow_redirects=True, stream=not is_m3u8_url)
+        r = _sess.get(u, headers=h, timeout=30, allow_redirects=True, stream=True)
     except Exception as e:
         return "upstream error %s" % e, 502
 
     ct = (r.headers.get("Content-Type") or "").lower()
-    is_m3u8 = ("mpegurl" in ct) or is_m3u8_url
-
-    if is_m3u8:
-        body = r.content
-        if r.status_code != 200:
-            return "upstream %s" % r.status_code, r.status_code
-        txt = body.decode("utf-8", "ignore")
-        base_url = r.url
-        out = []
-        for line in txt.splitlines():
-            s = line.strip()
-            if not s:
-                continue
-            if s.startswith("#"):
-                def _rw(m):
-                    v = m.group(2)
-                    if v.startswith("data:"):
-                        return m.group(0)
-                    return '%s"%s"' % (m.group(1), wrap(up.urljoin(base_url, v), ref))
-                out.append(re.sub(r'(URI=)"([^"]+)"', _rw, s))
-            else:
-                out.append(wrap(up.urljoin(base_url, s), ref))
-        return Response("\n".join(out), content_type="application/vnd.apple.mpegurl",
-                        headers={"Access-Control-Allow-Origin": "*", "Cache-Control": "no-store"})
+    if "mpegurl" in ct:
+        return proxy_m3u8_directly(u, ref)
 
     hdr = {
         "Access-Control-Allow-Origin": "*",
@@ -1787,39 +1863,52 @@ def proxy_v1(subpath):
             # 0.1 分页流（用户往下滑动加载更多）：直通上游
             qs = request.query_string.decode("utf-8")
             full_path = "/v1/" + subpath + (f"?{qs}" if qs else "")
-            st, r = up_req(request.method, full_path, timeout=5)
+            st, r = up_req(request.method, full_path, timeout=6)
             if st == 200 and isinstance(r, dict) and r.get("sections"):
                 clean_experience_ads(r)
                 resp = jsonify(r)
                 resp.status_code = 200
+                resp.headers["Access-Control-Allow-Origin"] = "*"
                 return resp
             # 上游分页暂无或超时，返回安全空分页结构，杜绝前端弹出“推荐分页暂未更新”错误
-            return jsonify({"object": "home.feed", "sections": [], "next_cursor": None})
+            resp = jsonify({
+                "object": "home.feed",
+                "sections": [],
+                "next_cursor": None,
+                "meta": {"next_cursor": None}
+            })
+            resp.headers["Access-Control-Allow-Origin"] = "*"
+            return resp
 
         # 0.2 首页初始流：全量11大栏目（电影、电视剧、美剧、日韩、动漫等）毫秒级秒出
         cache_file = os.path.join(CACHE_DIR, "home.json")
         seed_file = os.path.join(HERE, "seeds", "home.json")
         cached_data = None
-        for fp in [cache_file, seed_file]:
+        for fp in [seed_file, cache_file]:
             if os.path.exists(fp):
                 try:
                     with open(fp, "r", encoding="utf-8") as f:
                         d = json.load(f)
                         if isinstance(d, dict) and d.get("sections") and len(d["sections"]) >= 8:
                             cached_data = d
-                            break
+                            if len(d["sections"]) >= 11:
+                                break
                 except Exception:
                     pass
 
         # 优先毫秒级直出全量栏目（杜绝前端8秒白屏、仅有3个栏目与分页中断报错）
         if cached_data:
             clean_experience_ads(cached_data)
+            cached_data["next_cursor"] = None
+            if "meta" in cached_data and isinstance(cached_data["meta"], dict):
+                cached_data["meta"]["next_cursor"] = None
             resp = jsonify(cached_data)
             resp.status_code = 200
+            resp.headers["Access-Control-Allow-Origin"] = "*"
             return resp
 
         # 若本地未初始化，快速探测上游（请求全量 15 个栏目）
-        st, r = up_req("GET", "/v1/feed/home?scope=public&mode=preview&sections=15&cards=12", timeout=4)
+        st, r = up_req("GET", "/v1/feed/home?scope=public&mode=preview&sections=15&cards=12", timeout=5)
         if st == 200 and isinstance(r, dict) and r.get("sections") and len(r["sections"]) >= 8:
             clean_experience_ads(r)
             try:
@@ -1829,6 +1918,7 @@ def proxy_v1(subpath):
                 pass
             resp = jsonify(r)
             resp.status_code = 200
+            resp.headers["Access-Control-Allow-Origin"] = "*"
             return resp
 
     # 0.1 基础运行时配置：秒级回退
@@ -2584,7 +2674,9 @@ def proxy_v1(subpath):
                                 "resolve_required": False,
                                 "resolved": True,
                                 "selected": False,
-                                "url": f"/api/pan/stream/{pwd}?pan_type={ptype}&passcode={s.get('passcode', '')}&title={urllib.parse.quote(m_title)}",
+                                "url": (f"/api/pan/stream/{pwd}.m3u8?pan_type={ptype}&passcode={s.get('passcode', '')}&title={urllib.parse.quote(m_title)}&format=m3u8"
+                                        if ptype == "115"
+                                        else f"/api/pan/stream/{pwd}.mp4?pan_type={ptype}&passcode={s.get('passcode', '')}&title={urllib.parse.quote(m_title)}&format=mp4"),
                                 "url_kind": "m3u8" if ptype == "115" else "mp4",
                                 "is_4k": True,
                                 "is_pan": True
@@ -2604,7 +2696,7 @@ def proxy_v1(subpath):
                             "resolve_required": False,
                             "resolved": True,
                             "selected": False,
-                            "url": f"/api/pan/stream/auto?pan_type=quark&title={urllib.parse.quote(m_title)}",
+                            "url": f"/api/pan/stream/auto.mp4?pan_type=quark&title={urllib.parse.quote(m_title)}&format=mp4",
                             "url_kind": "mp4",
                             "is_4k": True,
                             "is_pan": True
@@ -2710,19 +2802,36 @@ def proxy_v1(subpath):
     return resp
 
 
-@app.route("/api/pan/stream/<pwd_id>")
+@app.route("/api/pan/stream/<path:pwd_id>")
 def api_pan_stream_play(pwd_id):
-    """网盘 4K 直链取流中继播放，支持智能平滑降级与全网搜盘"""
-    pan_type = request.args.get("pan_type", "quark")
+    """网盘 4K 直链取流中继播放，支持就地代理转写、智能平滑降级与全网搜盘"""
+    pan_type = request.args.get("pan_type", "")
     title = request.args.get("title", "")
+    fmt = request.args.get("format", "")
     from flask import redirect
+    
+    # 剥离 URL 文件后缀，提取标准 pwd_id
+    if pwd_id.endswith(".m3u8"):
+        pwd_id = pwd_id[:-5]
+        if not fmt:
+            fmt = "m3u8"
+    elif pwd_id.endswith(".mp4"):
+        pwd_id = pwd_id[:-4]
+        if not fmt:
+            fmt = "mp4"
+
+    if not pan_type:
+        pan_type = "115" if fmt == "m3u8" else "quark"
     
     # 自动搜盘
     if pwd_id == "auto" and title:
-        auto_shares = KPAN.search_pan_shares(title)
-        if auto_shares:
-            pwd_id = auto_shares[0].get("pwd_id") or auto_shares[0].get("share_url")
-            pan_type = auto_shares[0].get("pan_type") or pan_type
+        try:
+            auto_shares = KPAN.search_pan_shares(title)
+            if auto_shares:
+                pwd_id = auto_shares[0].get("pwd_id") or auto_shares[0].get("share_url")
+                pan_type = auto_shares[0].get("pan_type") or pan_type
+        except Exception as e:
+            print(f"[KanjuPan] auto search error: {e}")
 
     passcode = request.args.get("passcode", "").strip()
     if not passcode and pwd_id:
@@ -2738,27 +2847,50 @@ def api_pan_stream_play(pwd_id):
         except Exception:
             pass
 
-    res = KPAN.parse_pan_video_link(pwd_id, pan_type, passcode=passcode)
+    res = {}
+    try:
+        res = KPAN.parse_pan_video_link(pwd_id, pan_type, passcode=passcode)
+    except Exception as e:
+        res = {"ok": False, "error": str(e)}
+
     if res.get("ok"):
         target_url = res.get("stream_url")
         if not target_url and res.get("files"):
             target_url = res["files"][0].get("stream_url") or res["files"][0].get("url")
         if target_url:
+            ref = "https://115.com/" if ("115" in pan_type or "115" in target_url or "cpats" in target_url) else "https://pan.quark.cn/"
+            is_m3u8_target = ".m3u8" in target_url or fmt == "m3u8" or res.get("url_kind") == "m3u8"
+
+            # 针对 115 官方原画 m3u8，直接就地代理重写并直出，无需 302 重定向跳转，避免跨域阻断与切源中断
+            if is_m3u8_target and any(k in target_url for k in ("115", "quark", "cpats")) and target_url.startswith("http"):
+                return proxy_m3u8_directly(target_url, ref)
+
             # 网盘视频直链通过本地 /proxy 代理，完美绕过 CDN 防盗链（115 / Quark）并支持浏览器 Range 分片拖动
             if any(k in target_url for k in ("115", "quark", "cpats")):
-                ref = "https://115.com/" if ("115" in pan_type or "115" in target_url or "cpats" in target_url) else "https://pan.quark.cn/"
                 proxy_url = f"/proxy?u={urllib.parse.quote(target_url, safe='')}&ref={urllib.parse.quote(ref, safe='')}"
-                return redirect(proxy_url, code=302)
-            return redirect(target_url, code=302)
+                resp = redirect(proxy_url, code=302)
+                resp.headers["Access-Control-Allow-Origin"] = "*"
+                return resp
+            resp = redirect(target_url, code=302)
+            resp.headers["Access-Control-Allow-Origin"] = "*"
+            return resp
                 
     # 优雅回退：若未绑定网盘或链接失效或非视频，秒级切回本地采集源 4K 蓝光流，保障播放不断流！
     if title:
         print(f"[KanjuPan] 播放直链未提取成功({res.get('error')})，自动平滑无缝降级至采集源4K蓝光: {title}")
-        c_lines = KC.build_local_line_options(title)
-        if c_lines and c_lines[0].get("url"):
-            return redirect(c_lines[0]["url"], code=302)
+        try:
+            c_lines = KC.build_local_line_options(title)
+            if c_lines and c_lines[0].get("url"):
+                resp = redirect(c_lines[0]["url"], code=302)
+                resp.headers["Access-Control-Allow-Origin"] = "*"
+                return resp
+        except Exception as e:
+            print(f"[KanjuPan] fallback error: {e}")
             
-    return jsonify({"error": "未能提取网盘播放流", "detail": res.get("error"), "hint": "可前往 /admin 扫码登录网盘"}), 502
+    resp = jsonify({"error": "未能提取网盘播放流", "detail": res.get("error"), "hint": "可前往 /admin 扫码登录网盘"})
+    resp.status_code = 502
+    resp.headers["Access-Control-Allow-Origin"] = "*"
+    return resp
 
 
 # ================= 看剧AI 后台管理系统 =================

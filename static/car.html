@@ -438,6 +438,7 @@
       color: var(--accent-cyan);
     }
 
+    /* 栏目与卡片网格系统 */
     .shelf-section {
       margin-bottom: 36px;
     }
@@ -456,12 +457,13 @@
       gap: 20px;
     }
     .car-card {
-      background: var(--bg-surface);
+      background: #18181b;
       border: 2px solid var(--border-dark);
       border-radius: 16px;
       overflow: hidden;
       cursor: pointer;
       transition: all 0.15s ease;
+      position: relative;
     }
     .car-card:active {
       transform: scale(0.97);
@@ -472,10 +474,11 @@
       aspect-ratio: 2/3;
       object-fit: cover;
       display: block;
-      background: #111;
+      background: #27272a;
     }
     .car-card .card-info {
       padding: 12px 14px;
+      background: linear-gradient(180deg, rgba(24, 24, 27, 0.9) 0%, rgba(18, 18, 20, 1) 100%);
     }
     .car-card .card-t {
       font-size: 18px;
@@ -542,7 +545,15 @@
       </div>
     </div>
 
-    <!-- 栏目 2: 车机高分榜 -->
+    <!-- 栏目 2: 院线热映与高分电影 -->
+    <div class="shelf-section" id="shelf-movie-wrap">
+      <div class="shelf-title">🎬 院线热映与高分电影（4K 臻彩影院）</div>
+      <div class="car-card-grid" id="movie-grid">
+        <div style="color: var(--text-muted); font-size: 18px; padding: 20px;">正在载入电影库...</div>
+      </div>
+    </div>
+
+    <!-- 栏目 3: 车机高分榜 -->
     <div class="shelf-section" id="shelf-hot-wrap">
       <div class="shelf-title">🔥 车机高分热播榜（4K 极速蓝光）</div>
       <div class="car-card-grid" id="hot-grid">
@@ -550,22 +561,16 @@
       </div>
     </div>
 
-    <!-- 栏目 3: 热门连载剧集 -->
+    <!-- 栏目 4: 热门连载剧集 -->
     <div class="shelf-section" id="shelf-drama-wrap">
-      <div class="shelf-title">📺 热门剧集热追</div>
+      <div class="shelf-title">📺 热门剧集连载（国产新剧 / 美剧）</div>
       <div class="car-card-grid" id="drama-grid"></div>
     </div>
 
-    <!-- 栏目 4: 海外精选好剧 -->
+    <!-- 栏目 5: 海外精选好剧 -->
     <div class="shelf-section" id="shelf-anime-wrap">
-      <div class="shelf-title">🎭 海外精选好剧</div>
+      <div class="shelf-title">🎭 海外日韩精选剧集</div>
       <div class="car-card-grid" id="anime-grid"></div>
-    </div>
-
-    <!-- 栏目 5: 院线热映与高分电影 -->
-    <div class="shelf-section" id="shelf-movie-wrap">
-      <div class="shelf-title">🎬 院线热映与高分电影（4K 臻彩影院）</div>
-      <div class="car-card-grid" id="movie-grid"></div>
     </div>
   </main>
 
@@ -1596,12 +1601,15 @@
     // 8. 首页热播、多栏目聚合与海报过滤修复体系
     // ========================================================
     function isJunkOrSport(item) {
+      if (!item) return true;
       const t = (item.title || '');
-      const p = (item.poster || '');
-      if (p.includes('placeholder-poster.svg') || p.includes('placeholder') || (!p && !item.backdrop)) {
+      const p = (item.poster_url || item.poster || item.backdrop_url || item.backdrop || '');
+      // 过滤已知全黑占位图、默认骨架图与无海报资源
+      if (!p || p.includes('placeholder') || p.includes('0402bb2e86d1b8280211352546de2a20b4cf16b641d0c90f0909d41b915b6a1f')) {
         return true;
       }
-      const junkWords = ['赛季', 'VS', '女篮', '男篮', '联赛', '足球', '意甲', '德甲', '西甲', '法甲', '英超', '亚冠', '欧冠', '常规赛', '季前赛', '杯赛', '锦标赛'];
+      // 过滤球赛、锦标赛等无意义录像，专注优质影视剧
+      const junkWords = ['赛季', 'VS', '女篮', '男篮', '联赛', '足球', '意甲', '德甲', '西甲', '法甲', '英超', '亚冠', '欧冠', '常规赛', '季前赛', '杯赛', '锦标赛', '资格赛', '小组赛', '录像', '回放'];
       return junkWords.some(w => t.includes(w));
     }
 
@@ -1629,11 +1637,11 @@
     function createCarCard(item) {
       const card = document.createElement('div');
       card.className = 'car-card';
-      const posterUrl = item.poster || item.backdrop || '';
+      const posterUrl = item.poster_url || item.poster || item.backdrop_url || item.backdrop || '';
       const fallbackSrc = createSvgFallback(item.title);
 
       card.innerHTML = `
-        <img src="${posterUrl}" referrerpolicy="no-referrer" loading="lazy"/>
+        <img src="${posterUrl}" referrerpolicy="no-referrer" loading="lazy" alt="${item.title || ''}"/>
         <div class="card-info">
           <div class="card-t">${item.title}</div>
           <div class="card-s">
@@ -1654,7 +1662,7 @@
     }
 
     async function loadHomeContent() {
-      // 1. 优先加载高品质推荐频道 /api/home (大家都在看、韩剧、日剧)
+      // 1. 优先加载高品质推荐频道 /api/home (全量 11 大栏目毫秒级秒出)
       try {
         const homeRes = await fetch('/api/home');
         const homeData = await homeRes.json();
@@ -1663,51 +1671,68 @@
         // 栏目 1: 大家都在看
         if (sections.length > 0) {
           const popGrid = document.getElementById('home-popular-grid');
-          popGrid.innerHTML = '';
-          (sections[0].cards || []).slice(0, 18).forEach(item => {
-            if (!isJunkOrSport(item)) popGrid.appendChild(createCarCard(item));
+          if (popGrid) {
+            popGrid.innerHTML = '';
+            (sections[0].cards || []).slice(0, 18).forEach(item => {
+              if (!isJunkOrSport(item)) popGrid.appendChild(createCarCard(item));
+            });
+          }
+        }
+
+        // 栏目 2: 院线热映与高分电影
+        const movieSecs = sections.filter(s => {
+          const st = s.title || '';
+          return st.includes('电影') || st.includes('院线') || st.includes('即将上映') || st.includes('冷门好片');
+        });
+        const movieCards = [];
+        movieSecs.forEach(s => (s.cards || []).forEach(c => movieCards.push(c)));
+        const movieGrid = document.getElementById('movie-grid');
+        if (movieGrid && movieCards.length > 0) {
+          movieGrid.innerHTML = '';
+          movieCards.slice(0, 24).forEach(item => {
+            if (!isJunkOrSport(item)) movieGrid.appendChild(createCarCard(item));
           });
         }
 
-        // 栏目 3: 热门连载
-        if (sections.length > 1) {
-          const dramaGrid = document.getElementById('drama-grid');
+        // 栏目 4: 热门剧集连载 (国产新剧 / 美剧)
+        const dramaSecs = sections.filter(s => {
+          const st = s.title || '';
+          return st.includes('国产') || st.includes('美剧') || (st.includes('剧') && !st.includes('韩') && !st.includes('日'));
+        });
+        const dramaCards = [];
+        dramaSecs.forEach(s => (s.cards || []).forEach(c => dramaCards.push(c)));
+        const dramaGrid = document.getElementById('drama-grid');
+        if (dramaGrid && dramaCards.length > 0) {
           dramaGrid.innerHTML = '';
-          (sections[1].cards || []).slice(0, 18).forEach(item => {
+          dramaCards.slice(0, 24).forEach(item => {
             if (!isJunkOrSport(item)) dramaGrid.appendChild(createCarCard(item));
           });
         }
 
-        // 栏目 4: 海外日韩精选
-        if (sections.length > 2) {
-          const animeGrid = document.getElementById('anime-grid');
+        // 栏目 5: 海外日韩精选剧集
+        const animeSecs = sections.filter(s => {
+          const st = s.title || '';
+          return st.includes('韩剧') || st.includes('日剧') || st.includes('动画') || st.includes('海外');
+        });
+        const animeCards = [];
+        animeSecs.forEach(s => (s.cards || []).forEach(c => animeCards.push(c)));
+        const animeGrid = document.getElementById('anime-grid');
+        if (animeGrid && animeCards.length > 0) {
           animeGrid.innerHTML = '';
-          (sections[2].cards || []).slice(0, 18).forEach(item => {
+          animeCards.slice(0, 24).forEach(item => {
             if (!isJunkOrSport(item)) animeGrid.appendChild(createCarCard(item));
           });
-        }
-
-        // 栏目 5: 院线热映与高分电影
-        const movieSec = sections.find(s => (s.title || '').includes('电影')) || (sections.length > 5 ? sections[5] : null);
-        if (movieSec) {
-          const movieGrid = document.getElementById('movie-grid');
-          if (movieGrid) {
-            movieGrid.innerHTML = '';
-            (movieSec.cards || []).slice(0, 18).forEach(item => {
-              if (!isJunkOrSport(item)) movieGrid.appendChild(createCarCard(item));
-            });
-          }
         }
       } catch (e) {
         console.warn('[Car] loadHome sections failed:', e);
       }
 
-      // 2. 加载排行榜 /api/rank，严格过滤掉无海报的比赛录像与 placeholder-poster.svg
+      // 2. 加载排行榜 /api/rank，严格过滤掉无海报的比赛录像与全黑卡片
       try {
         const rankRes = await fetch('/api/rank');
         const rankData = await rankRes.json();
         const hotGrid = document.getElementById('hot-grid');
-        if (rankData.items && rankData.items.length) {
+        if (hotGrid && rankData.items && rankData.items.length) {
           hotGrid.innerHTML = '';
           const validRankItems = rankData.items.filter(item => !isJunkOrSport(item));
           validRankItems.slice(0, 24).forEach(item => {

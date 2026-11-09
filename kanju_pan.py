@@ -34,24 +34,27 @@ def _db():
 
 def has_active_pan_account(pan_type=None):
     """检查本地是否已绑定并激活网盘账号或点115账号"""
-    init_pan_db()
-    with _db() as conn:
-        if pan_type:
-            row = conn.execute("SELECT id FROM pan_accounts WHERE pan_type=? AND status='active' LIMIT 1", (pan_type,)).fetchone()
-        else:
-            row = conn.execute("SELECT id FROM pan_accounts WHERE status='active' LIMIT 1").fetchone()
-        if row:
-            return True
+    try:
+        init_pan_db()
+        with _db() as conn:
+            if pan_type:
+                row = conn.execute("SELECT id FROM pan_accounts WHERE pan_type=? AND status='active' LIMIT 1", (pan_type,)).fetchone()
+            else:
+                row = conn.execute("SELECT id FROM pan_accounts WHERE status='active' LIMIT 1").fetchone()
+            if row:
+                return True
 
-        # 检查是否绑定了激活的点115账号
-        if not pan_type or pan_type == "115":
-            try:
-                d_row = conn.execute("SELECT id FROM dian115_config WHERE status='active' LIMIT 1").fetchone()
-                if d_row:
-                    return True
-            except Exception:
-                pass
-        return False
+            # 检查是否绑定了激活的点115账号
+            if not pan_type or pan_type == "115":
+                try:
+                    d_row = conn.execute("SELECT id FROM dian115_config WHERE status='active' LIMIT 1").fetchone()
+                    if d_row:
+                        return True
+                except Exception:
+                    pass
+    except Exception as e:
+        print(f"[KanjuPan] has_active_pan_account error: {e}")
+    return False
 
 def init_pan_db():
     """初始化网盘账号表与扫码会话表"""
@@ -579,14 +582,22 @@ def parse_pan_video_link(link_url, pan_type=None, passcode=""):
             pan_type = "quark"
             
     # 取出该网盘当前激活的账号 Cookie
-    with _db() as conn:
-        acc = conn.execute("SELECT * FROM pan_accounts WHERE pan_type=? AND status='active' ORDER BY id DESC LIMIT 1", (pan_type,)).fetchone()
-        if not acc or not acc["cookie"]:
-            return {
-                "ok": False,
-                "error": f"暂未绑定【{pan_type.upper()}网盘】的有效账号，请先在上方扫码登录后再进行解析！"
-            }
-        cookie = acc["cookie"]
+    cookie = ""
+    try:
+        with _db() as conn:
+            acc = conn.execute("SELECT * FROM pan_accounts WHERE pan_type=? AND status='active' ORDER BY id DESC LIMIT 1", (pan_type,)).fetchone()
+            if not acc or not acc["cookie"]:
+                return {
+                    "ok": False,
+                    "error": f"暂未绑定【{pan_type.upper()}网盘】的有效账号，请先在上方扫码登录后再进行解析！"
+                }
+            cookie = acc["cookie"]
+    except Exception as e:
+        print(f"[KanjuPan] parse_pan_video_link DB error: {e}")
+        return {
+            "ok": False,
+            "error": f"读取网盘账号配置异常: {e}"
+        }
         
     try:
         if pan_type == "quark":
@@ -847,15 +858,19 @@ def search_pan_shares(keyword, pan_type=None):
         return []
 
     # 1. 先查本地已收录的片单索引
-    with _db() as conn:
-        query = "SELECT * FROM pan_shares_index WHERE keyword LIKE ? OR title LIKE ?"
-        params = [f"%{keyword}%", f"%{keyword}%"]
-        if pan_type:
-            query += " AND pan_type=?"
-            params.append(pan_type)
-        query += " ORDER BY id DESC LIMIT 30"
-        rows = conn.execute(query, params).fetchall()
-        local_results = [dict(r) for r in rows]
+    local_results = []
+    try:
+        with _db() as conn:
+            query = "SELECT * FROM pan_shares_index WHERE keyword LIKE ? OR title LIKE ?"
+            params = [f"%{keyword}%", f"%{keyword}%"]
+            if pan_type:
+                query += " AND pan_type=?"
+                params.append(pan_type)
+            query += " ORDER BY id DESC LIMIT 30"
+            rows = conn.execute(query, params).fetchall()
+            local_results = [dict(r) for r in rows]
+    except Exception as e:
+        print(f"[KanjuPan] search_pan_shares initial query error: {e}")
 
     has_115 = any(r.get("pan_type") == "115" for r in local_results)
     has_quark = any(r.get("pan_type") in ("quark", "uc") for r in local_results)
@@ -887,15 +902,18 @@ def search_pan_shares(keyword, pan_type=None):
 
     # 4. 若新抓取到了资源，重新读取最新本地库
     if need_requery:
-        with _db() as conn:
-            query = "SELECT * FROM pan_shares_index WHERE keyword LIKE ? OR title LIKE ?"
-            params = [f"%{keyword}%", f"%{keyword}%"]
-            if pan_type:
-                query += " AND pan_type=?"
-                params.append(pan_type)
-            query += " ORDER BY id DESC LIMIT 30"
-            rows = conn.execute(query, params).fetchall()
-            local_results = [dict(r) for r in rows]
+        try:
+            with _db() as conn:
+                query = "SELECT * FROM pan_shares_index WHERE keyword LIKE ? OR title LIKE ?"
+                params = [f"%{keyword}%", f"%{keyword}%"]
+                if pan_type:
+                    query += " AND pan_type=?"
+                    params.append(pan_type)
+                query += " ORDER BY id DESC LIMIT 30"
+                rows = conn.execute(query, params).fetchall()
+                local_results = [dict(r) for r in rows]
+        except Exception as e:
+            print(f"[KanjuPan] search_pan_shares requery error: {e}")
 
     if local_results:
         local_results.sort(key=rank_pan_share, reverse=True)
