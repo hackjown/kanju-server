@@ -259,7 +259,7 @@ def hls():
 # ---------------- 接口 ----------------
 @app.route("/api/home")
 def api_home():
-    d, err = api_get("/v1/feed/home?scope=public&mode=preview&sections=3&cards=18",
+    d, err = api_get("/v1/feed/home?scope=public&mode=preview&cards=18",
                      cache_key="home", ttl=300)
     if err:
         return jsonify({"ok": False, "error": err}), 502
@@ -618,10 +618,9 @@ def proxy():
     if not pu.netloc:
         return "bad u", 400
     ref = request.args.get("ref") or (pu.scheme + "://" + pu.netloc + "/")
-    host = request.host_url.rstrip("/")
 
     def wrap(absu, r):
-        return host + "/proxy?u=" + up.quote(absu, safe="") + "&ref=" + up.quote(r, safe="")
+        return "/proxy?u=" + up.quote(absu, safe="") + "&ref=" + up.quote(r, safe="")
 
     h = {
         "User-Agent": UA,
@@ -646,7 +645,7 @@ def proxy():
     is_m3u8_url = ".m3u8" in pu.path or "m3u8" in request.args.get("format", "")
 
     try:
-        r = _sess.get(u, headers=h, timeout=30, allow_redirects=True, stream=not is_m3u8_url)
+        r = requests.get(u, headers=h, timeout=30, allow_redirects=True, stream=not is_m3u8_url)
     except Exception as e:
         return "upstream error %s" % e, 502
 
@@ -1770,8 +1769,23 @@ def proxy_v1(subpath):
         resp.headers["Access-Control-Allow-Origin"] = "*"
         return resp
 
-    # 0. 首页信息流：毫秒级响应 + 本地种子容灾 + 低延迟上游探测（杜绝前端超时）
+    # 0. 首页信息流：支持无限滚动分页 + 毫秒级全栏目种子容灾 + 低延迟上游探测
     if subpath.startswith("feed/home") and request.method == "GET":
+        cursor = request.args.get("cursor")
+        if cursor:
+            # 0.1 分页流（用户往下滑动加载更多）：直通上游
+            qs = request.query_string.decode("utf-8")
+            full_path = "/v1/" + subpath + (f"?{qs}" if qs else "")
+            st, r = up_req(request.method, full_path, timeout=5)
+            if st == 200 and isinstance(r, dict):
+                clean_experience_ads(r)
+                resp = jsonify(r)
+                resp.status_code = 200
+                return resp
+            # 上游分页暂无或超时，返回安全空分页结构，杜绝前端弹出“推荐分页暂未更新”错误
+            return jsonify({"object": "home.feed", "sections": [], "next_cursor": None})
+
+        # 0.2 首页初始流：
         cache_file = os.path.join(CACHE_DIR, "home.json")
         seed_file = os.path.join(HERE, "seeds", "home.json")
         cached_data = None
@@ -1781,32 +1795,17 @@ def proxy_v1(subpath):
                 try:
                     with open(fp, "r", encoding="utf-8") as f:
                         d = json.load(f)
-                        if isinstance(d, dict) and d.get("sections"):
+                        if isinstance(d, dict) and d.get("sections") and len(d["sections"]) >= 5:
                             cached_data = d
                             break
                 except Exception:
                     pass
 
-        # 缓存有效性：若本地缓存存在且新鲜（< 15分钟），直接毫秒级返回
-        is_fresh = False
-        if cached_data and os.path.exists(cache_file):
-            try:
-                if now_ts - os.path.getmtime(cache_file) < 900:
-                    is_fresh = True
-            except Exception:
-                pass
-
-        if cached_data and is_fresh:
-            clean_experience_ads(cached_data)
-            resp = jsonify(cached_data)
-            resp.status_code = 200
-            return resp
-
-        # 否则快速探测上游（4秒超时），成功则持久化，失败立即平滑回退
+        # 优先快速探测上游（3秒低延迟，成功则更新本地缓存）
         qs = request.query_string.decode("utf-8")
         full_path = "/v1/" + subpath + (f"?{qs}" if qs else "")
-        st, r = up_req(request.method, full_path, timeout=4)
-        if st == 200 and isinstance(r, dict) and r.get("sections"):
+        st, r = up_req(request.method, full_path, timeout=3)
+        if st == 200 and isinstance(r, dict) and r.get("sections") and len(r["sections"]) >= 5:
             clean_experience_ads(r)
             try:
                 with open(cache_file, "w", encoding="utf-8") as f:
@@ -1817,6 +1816,7 @@ def proxy_v1(subpath):
             resp.status_code = 200
             return resp
 
+        # 上游慢或网络抖动时：毫秒级秒级回退至本地 8 大完整栏目（电影、电视剧、美剧、动漫等全量容灾数据）
         if cached_data:
             clean_experience_ads(cached_data)
             resp = jsonify(cached_data)
