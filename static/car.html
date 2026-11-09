@@ -1027,7 +1027,7 @@
       const tick = () => {
         const isEngineActive = window.CarMediaEngine && (window.CarMediaEngine.mode === 'webcodecs' || window.CarMediaEngine.mode === 'wasm');
 
-        if (isEngineActive) {
+        if (isEngineActive && window.CarMediaEngine.hasActiveStream) {
           // 自主解码引擎模式：Virtual Timeline 驱动进度与统计
           updateProgress();
           frameCount++;
@@ -1128,6 +1128,14 @@
 
       document.getElementById('stat-audio').innerText = `WebAudio ${audioCtx.sampleRate/1000}kHz (PCM/DSP)`;
       renderSpectrumLoop();
+
+      ['click', 'touchstart', 'pointerdown'].forEach(evt => {
+        document.addEventListener(evt, () => {
+          if (audioCtx && audioCtx.state === 'suspended') {
+            audioCtx.resume().catch(() => {});
+          }
+        }, { passive: true });
+      });
     }
 
     function setAudioProfile(profile) {
@@ -1456,6 +1464,9 @@
     // 彻底废除 Native Fallback 与 HTMLVideoElement 原生渲染，所有片源 (M3U8 / MP4) 均由 WASM 软解
     async function playMediaSource(url) {
       initWebAudio();
+      if (audioCtx && audioCtx.state === 'suspended') {
+        audioCtx.resume().catch(() => {});
+      }
       if (window.CarMediaEngine) window.CarMediaEngine.stop();
       if (video.dataset.wasmObjectUrl) {
         URL.revokeObjectURL(video.dataset.wasmObjectUrl);
@@ -1487,6 +1498,9 @@
     }
 
     function fallbackHlsPlay(url) {
+      if (audioCtx && audioCtx.state === 'suspended') {
+        audioCtx.resume().catch(() => {});
+      }
       let decodedHint = url;
       try { decodedHint = decodeURIComponent(url); } catch (_) {}
       const isHls = /\.m3u8(?:$|[?#&])/i.test(decodedHint);
@@ -1496,7 +1510,7 @@
         hlsInstance.attachMedia(video);
         hlsInstance.on(Hls.Events.MANIFEST_PARSED, () => {
           video.play().catch(e => console.warn(e));
-          if (window.CarMediaEngine) window.CarMediaEngine.status('极速直通 (WASM 核心就绪后自动切换)', 'wasm');
+          if (window.CarMediaEngine) window.CarMediaEngine.status('极速直通加速模式', 'native');
         });
       } else {
         video.src = url;

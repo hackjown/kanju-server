@@ -895,32 +895,35 @@ registerProcessor('pcm-ring-buffer-processor', PcmRingBufferProcessor);
       for (const src of FFMPEG_CDN_SOURCES) {
         try {
           status(`正在连接 WASM 核心 (${src.name})…`, 'wasm');
-          const { FFmpeg } = await import(src.moduleUrl);
+          const isLocal = src.moduleUrl.startsWith('/');
+          const baseUrl = typeof location !== 'undefined' ? location.origin : '';
+
+          const moduleUrl = isLocal ? new URL(src.moduleUrl, baseUrl).href : src.moduleUrl;
+          const { FFmpeg } = await import(moduleUrl);
           const ffmpeg = new FFmpeg();
-          status(`下载 WASM 脚本 (${src.name})…`, 'wasm');
-          const coreURL = await safeToBlobURL(src.coreJs, 'text/javascript');
-          status(`下载 WASM 核心字节码 (${src.name})…`, 'wasm');
-          const wasmURL = await safeToBlobURL(src.coreWasm, 'application/wasm', (progress) => {
-            if (progress) {
-              const mb = (progress.received / (1024 * 1024)).toFixed(1);
-              let pctText = '';
-              if (progress.total > 0 && progress.total >= progress.received) {
-                const pct = Math.round((progress.received / progress.total) * 100);
-                pctText = ` ${pct}%`;
+
+          let coreURL, wasmURL, classWorkerURL;
+          if (isLocal) {
+            coreURL = new URL(src.coreJs, baseUrl).href;
+            wasmURL = new URL(src.coreWasm, baseUrl).href;
+            classWorkerURL = new URL(src.workerUrl, baseUrl).href;
+          } else {
+            status(`下载 WASM 脚本 (${src.name})…`, 'wasm');
+            coreURL = await safeToBlobURL(src.coreJs, 'text/javascript');
+            status(`下载 WASM 核心字节码 (${src.name})…`, 'wasm');
+            wasmURL = await safeToBlobURL(src.coreWasm, 'application/wasm', (progress) => {
+              if (progress) {
+                const mb = (progress.received / (1024 * 1024)).toFixed(1);
+                let pctText = '';
+                if (progress.total > 0 && progress.total >= progress.received) {
+                  const pct = Math.round((progress.received / progress.total) * 100);
+                  pctText = ` ${pct}%`;
+                }
+                status(`WASM 核心下载中${pctText} (${mb}MB)…`, 'wasm');
               }
-              status(`WASM 核心下载中${pctText} (${mb}MB)…`, 'wasm');
-            }
-          });
-          // 核心修复：解决浏览器跨域 Worker 构造限制 (Failed to construct 'Worker')
-          let classWorkerURL = undefined;
-          if (src.workerUrl) {
-            if (src.workerUrl.startsWith('/') || (typeof location !== 'undefined' && src.workerUrl.startsWith(location.origin))) {
-              classWorkerURL = src.workerUrl;
-            } else {
-              // 跨域 CDN 场景：用同源 Blob 包装 import 语句，彻底规避跨域 Worker 构造异常
-              const workerBlob = new Blob([`import "${src.workerUrl}";`], { type: 'text/javascript' });
-              classWorkerURL = URL.createObjectURL(workerBlob);
-            }
+            });
+            const workerBlob = new Blob([`import "${src.workerUrl}";`], { type: 'text/javascript' });
+            classWorkerURL = URL.createObjectURL(workerBlob);
           }
 
           status('正在初始化 WASM 运行时…', 'wasm');
@@ -1451,6 +1454,10 @@ registerProcessor('pcm-ring-buffer-processor', PcmRingBufferProcessor);
     connectAudioContext,
     getDiagnostics,
     get mode() { return state.mode; },
+    get hasActiveStream() {
+      return (state.mode === 'webcodecs' && (state.frames.length > 0 || !!state.lastFrame)) ||
+             (state.mode === 'wasm' && state.wasmFrames && state.wasmFrames.length > 0);
+    },
     get currentTime() { return getCurrentTime(); },
     get duration() { return state.duration; },
     get paused() { return state.paused; },
