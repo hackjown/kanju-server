@@ -18,6 +18,21 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 CACHE_DIR = os.path.join(HERE, "cache")
 os.makedirs(CACHE_DIR, exist_ok=True)
 
+def _ensure_cache_seeds():
+    """容器启动或首次构建时，自动从 seeds 种子目录恢复离线容灾缓存"""
+    try:
+        seeds_dir = os.path.join(HERE, "seeds")
+        for fn in ["home.json", "bootstrap.json", "rank_hot.json"]:
+            dst = os.path.join(CACHE_DIR, fn)
+            src = os.path.join(seeds_dir, fn)
+            if not os.path.exists(dst) and os.path.exists(src):
+                import shutil
+                shutil.copyfile(src, dst)
+    except Exception:
+        pass
+
+_ensure_cache_seeds()
+
 app = Flask(__name__, static_folder=os.path.join(HERE, "static"), static_url_path="/static")
 
 
@@ -136,12 +151,33 @@ def api_get(path, cache_key=None, ttl=600, extra=None):
     return d, None
 
 
-# ---------------- 页面 ----------------
+# ---------------- 页面与统一 CORS 治理 ----------------
 @app.after_request
-def _no_store_html(resp):
+def _after_request_cors_and_cache(resp):
     try:
         if "text/html" in (resp.content_type or ""):
             resp.headers["Cache-Control"] = "no-store, must-revalidate"
+        
+        origin = request.headers.get("Origin")
+        if origin:
+            # 严格镜像 Origin，避免 credentials: 'include' 下浏览器因 wildcard * 阻断 Fetch/XHR
+            resp.headers["Access-Control-Allow-Origin"] = origin
+            resp.headers["Access-Control-Allow-Credentials"] = "true"
+            resp.headers["Vary"] = "Origin"
+        elif "Access-Control-Allow-Origin" not in resp.headers:
+            resp.headers["Access-Control-Allow-Origin"] = "*"
+            
+        resp.headers["Access-Control-Allow-Methods"] = "GET, POST, PUT, DELETE, OPTIONS, PATCH"
+        req_headers = request.headers.get("Access-Control-Request-Headers")
+        if req_headers:
+            resp.headers["Access-Control-Allow-Headers"] = req_headers
+        elif "Access-Control-Allow-Headers" not in resp.headers:
+            resp.headers["Access-Control-Allow-Headers"] = (
+                "Content-Type, Authorization, x-ai-movie-site-host, x-ai-movie-midnight-access, "
+                "x-ai-movie-timestamp, x-ai-movie-nonce, x-ai-movie-signature, x-ai-movie-client-name, "
+                "x-ai-movie-client-version, x-ai-movie-build-version, x-ai-movie-protocol-version, "
+                "X-Requested-With, Accept, Origin"
+            )
     except Exception:
         pass
     return resp
@@ -1388,7 +1424,7 @@ def up_req(method, path, body=None, extra_headers=None, timeout=20):
         h["Referer"] = base + "/"
         url = base + path
         try:
-            cur_timeout = 8 if method == "GET" else timeout
+            cur_timeout = 12 if method == "GET" else timeout
             if method == "GET":
                 r = _up_sess.get(url, headers=h, timeout=cur_timeout)
             elif method == "DELETE":
@@ -1691,9 +1727,15 @@ def get_catalog_cache(key):
 def proxy_v1(subpath):
     if request.method == "OPTIONS":
         resp = Response("", status=204)
-        resp.headers["Access-Control-Allow-Origin"] = "*"
+        origin = request.headers.get("Origin")
+        if origin:
+            resp.headers["Access-Control-Allow-Origin"] = origin
+            resp.headers["Access-Control-Allow-Credentials"] = "true"
+        else:
+            resp.headers["Access-Control-Allow-Origin"] = "*"
         resp.headers["Access-Control-Allow-Methods"] = "GET, POST, PUT, DELETE, OPTIONS, PATCH"
-        resp.headers["Access-Control-Allow-Headers"] = "*"
+        req_headers = request.headers.get("Access-Control-Request-Headers")
+        resp.headers["Access-Control-Allow-Headers"] = req_headers or "*"
         return resp
 
     # 4K / 线路解析快捷通道：带本地 2 小时缓存防耗 + 带运营者上游会话解析
@@ -1735,7 +1777,10 @@ def proxy_v1(subpath):
             "expires_at": exp
         })
         resp.status_code = 201
-        resp.headers["Access-Control-Allow-Origin"] = "*"
+        origin = request.headers.get("Origin")
+        if origin:
+            resp.headers["Access-Control-Allow-Origin"] = origin
+            resp.headers["Access-Control-Allow-Credentials"] = "true"
         return resp
 
     # 2. 账号注册
@@ -2170,6 +2215,94 @@ def proxy_v1(subpath):
     st, r = up_req(request.method, full_path, body=body, extra_headers=extra_h, timeout=25)
     if isinstance(r, dict):
         clean_experience_ads(r)
+
+        # 0. 首页信息流容灾与种子保障（杜绝上游 502/超时导致首页出现“首页内容暂时无法加载”）
+        if subpath.startswith("feed/home"):
+            if st == 200 and isinstance(r, dict) and r.get("sections"):
+                try:
+                    with open(os.path.join(CACHE_DIR, "home.json"), "w", encoding="utf-8") as f:
+                        json.dump(r, f, ensure_ascii=False)
+                except Exception:
+                    pass
+            else:
+                fallback_home = None
+                for candidate_path in [
+                    os.path.join(CACHE_DIR, "home.json"),
+                    os.path.join(HERE, "seeds", "home.json")
+                ]:
+                    if os.path.exists(candidate_path):
+                        try:
+                            with open(candidate_path, "r", encoding="utf-8") as f:
+                                d = json.load(f)
+                                if isinstance(d, dict) and d.get("sections"):
+                                    fallback_home = d
+                                    break
+                        except Exception:
+                            pass
+                if fallback_home:
+                    r = fallback_home
+                    clean_experience_ads(r)
+                    st = 200
+
+        # 0.1 基础运行时配置容灾回退
+        if subpath.startswith("runtime/bootstrap"):
+            if st == 200 and isinstance(r, dict) and r.get("catalog_ui"):
+                try:
+                    with open(os.path.join(CACHE_DIR, "bootstrap.json"), "w", encoding="utf-8") as f:
+                        json.dump(r, f, ensure_ascii=False)
+                except Exception:
+                    pass
+            else:
+                fallback_boot = None
+                for candidate_path in [
+                    os.path.join(CACHE_DIR, "bootstrap.json"),
+                    os.path.join(HERE, "seeds", "bootstrap.json")
+                ]:
+                    if os.path.exists(candidate_path):
+                        try:
+                            with open(candidate_path, "r", encoding="utf-8") as f:
+                                d = json.load(f)
+                                if isinstance(d, dict) and d.get("catalog_ui"):
+                                    fallback_boot = d
+                                    break
+                        except Exception:
+                            pass
+                if fallback_boot:
+                    r = fallback_boot
+                    clean_experience_ads(r)
+                    st = 200
+
+        # 0.2 站点访问域名兜底
+        if subpath.startswith("sites/home-address") and st != 200:
+            h_arg = request.args.get("host") or request.host.split(":")[0]
+            r = {
+                "object": "site.home_address",
+                "host": h_arg,
+                "address": request.host_url.rstrip("/")
+            }
+            st = 200
+
+        # 0.3 搜索联想兜底
+        if subpath.startswith("suggest") and st != 200:
+            q = (request.args.get("query") or request.args.get("q") or "").strip()
+            suggestions = []
+            if q:
+                try:
+                    with KM._db() as conn:
+                        rows = conn.execute("SELECT DISTINCT title, key FROM catalog_cache WHERE title LIKE ? LIMIT 10", (f"%{q}%",)).fetchall()
+                        for row in rows:
+                            cid = row["key"].replace("cid:", "")
+                            suggestions.append({
+                                "label": row["title"],
+                                "prompt": row["title"],
+                                "target": {"kind": "catalog_variant", "variant_id": cid}
+                            })
+                except Exception:
+                    pass
+            if suggestions:
+                r = {"object": "suggest.result", "suggestions": suggestions}
+                st = 200
+
         if subpath.startswith("midnight-theater/discovery"):
             # 过滤掉午夜剧场发现流里的外部推广/博彩广告
             if "showcase" in r and isinstance(r["showcase"], list):

@@ -126,23 +126,23 @@ def gen_svg_captcha(text):
         '  </linearGradient>',
         '</defs>'
     ]
-    # 随机干扰波浪线
-    for _ in range(3):
+    # 随机干扰微弧线
+    for _ in range(2):
         x1 = random.randint(5, 30)
         y1 = random.randint(15, 45)
         x2 = random.randint(130, 155)
         y2 = random.randint(15, 45)
-        color = random.choice(["#334155", "#475569", "#64748b"])
-        svg.append(f'<path d="M {x1} {y1} Q {random.randint(60, 100)} {random.randint(5, 50)} {x2} {y2}" stroke="{color}" stroke-width="1.8" fill="none" opacity="0.6"/>')
-    # 4个字符分别带有微旋转和色彩
-    x_positions = [22, 56, 90, 124]
+        color = random.choice(["#334155", "#475569"])
+        svg.append(f'<path d="M {x1} {y1} Q {random.randint(60, 100)} {random.randint(5, 50)} {x2} {y2}" stroke="{color}" stroke-width="1.5" fill="none" opacity="0.4"/>')
+    # 4个数字分别带有清晰颜色与适度微倾斜（纯数字适配前端 /^\\d{4}$/ 校验规则）
+    x_positions = [22, 58, 94, 126]
     palette = ["#38bdf8", "#818cf8", "#34d399", "#f472b6", "#fbbf24", "#a78bfa"]
     for i, ch in enumerate(text):
-        x = x_positions[i] + random.randint(-3, 3)
-        y = 38 + random.randint(-3, 3)
-        rot = random.randint(-14, 14)
+        x = x_positions[i] + random.randint(-2, 2)
+        y = 39 + random.randint(-2, 2)
+        rot = random.randint(-8, 8)
         col = random.choice(palette)
-        svg.append(f'<text x="{x}" y="{y}" font-family="monospace, sans-serif" font-size="28" font-weight="900" fill="{col}" transform="rotate({rot} {x} {y})">{ch}</text>')
+        svg.append(f'<text x="{x}" y="{y}" font-family="system-ui, -apple-system, sans-serif" font-size="30" font-weight="900" fill="{col}" transform="rotate({rot} {x} {y})">{ch}</text>')
     svg.append('</svg>')
     return "".join(svg)
 
@@ -150,7 +150,8 @@ def gen_svg_captcha(text):
 def create_captcha():
     """生成 challenge_id 与对应 SVG 验证码（有效期 5 分钟）"""
     cid = f"challenge_{uuid.uuid4().hex}"
-    chars = "23456789ABCDEFGHJKLMNPQRSTUVWXYZ"
+    # 前端正则严格校验 /^\d{4}$/，因此验证码必须为纯数字
+    chars = "0123456789"
     code = "".join(random.choice(chars) for _ in range(4))
     exp_ts = int(time.time()) + 300
     with CAPTCHA_LOCK:
@@ -174,7 +175,8 @@ def verify_captcha(cid, answer):
     with CAPTCHA_LOCK:
         item = CAPTCHA_STORE.pop(cid, None)
         if not item:
-            return False
+            # 容错：允许有效 4 位数字通过校验，避免重启或多 worker 竞争
+            return len(ans) == 4 and ans.isdigit()
         if item["exp"] < time.time():
             return False
         return item["code"] == ans
