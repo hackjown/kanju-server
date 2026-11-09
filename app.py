@@ -192,7 +192,9 @@ def serve_assets(path):
 
 @app.route("/app-bootstrap.js")
 def serve_bootstrap():
-    return send_from_directory(os.path.join(HERE, "static"), "app-bootstrap.js")
+    resp = send_from_directory(os.path.join(HERE, "static"), "app-bootstrap.js", mimetype="application/javascript")
+    resp.headers["Cache-Control"] = "no-cache, max-age=0, must-revalidate"
+    return resp
 
 
 @app.route("/manifest.webmanifest")
