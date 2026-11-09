@@ -513,8 +513,8 @@ registerProcessor('pcm-ring-buffer-processor', PcmRingBufferProcessor);
       return Math.max(0, Math.min(state.duration, basePtsSec + dacSec * state.playbackRate));
     }
 
-    // 其次使用 WebAudio AudioContext 连续时钟
-    if (state.audioCtx && state.audioBasePtsUs !== null) {
+    // 其次使用 WebAudio AudioContext 连续时钟 (仅在 running 状态下采纳，防止 suspended 时时钟锁死在 0)
+    if (state.audioCtx && state.audioCtx.state === 'running' && state.audioBasePtsUs !== null) {
       const elapsed = (state.audioCtx.currentTime - state.audioBaseCtxTime) * state.playbackRate;
       return Math.max(0, Math.min(state.duration, state.audioBasePtsUs / 1e6 + elapsed));
     }
@@ -831,6 +831,55 @@ registerProcessor('pcm-ring-buffer-processor', PcmRingBufferProcessor);
   }
 
   // ================= 核心启动：真正的 FFmpeg.wasm 逐帧软解 =================
+  // 自定义可靠的 BlobURL 生成器：规避 @ffmpeg/util 在响应带有 gzip 压缩时抛出 body stream already read 的致命缺陷
+  async function safeToBlobURL(url, mimeType, onProgress) {
+    const resp = await fetch(url);
+    if (!resp.ok) throw new Error(`HTTP ${resp.status} on ${url}`);
+
+    if (!onProgress || !resp.body || !resp.body.getReader) {
+      const blob = await resp.blob();
+      return URL.createObjectURL(mimeType ? new Blob([blob], { type: mimeType }) : blob);
+    }
+
+    const contentLength = parseInt(resp.headers.get('Content-Length') || '-1', 10);
+    const reader = resp.body.getReader();
+    const chunks = [];
+    let received = 0;
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (value) {
+        chunks.push(value);
+        received += value.length;
+        if (onProgress) {
+          try {
+            onProgress({
+              url,
+              total: contentLength,
+              received,
+              done: false
+            });
+          } catch (_) {}
+        }
+      }
+    }
+
+    if (onProgress) {
+      try {
+        onProgress({
+          url,
+          total: received,
+          received,
+          done: true
+        });
+      } catch (_) {}
+    }
+
+    const blob = new Blob(chunks, { type: mimeType || 'application/octet-stream' });
+    return URL.createObjectURL(blob);
+  }
+
   async function ensureFFmpeg() {
     if (state.ffmpeg) return state.ffmpeg;
     if (state.ffmpegLoading) return state.ffmpegLoading;
@@ -839,19 +888,20 @@ registerProcessor('pcm-ring-buffer-processor', PcmRingBufferProcessor);
       for (const src of FFMPEG_CDN_SOURCES) {
         try {
           status(`正在连接 WASM 核心 (${src.name})…`, 'wasm');
-          const [{ FFmpeg }, { toBlobURL }] = await Promise.all([
-            import(src.moduleUrl),
-            import(src.utilUrl)
-          ]);
+          const { FFmpeg } = await import(src.moduleUrl);
           const ffmpeg = new FFmpeg();
+          status(`下载 WASM 脚本 (${src.name})…`, 'wasm');
+          const coreURL = await safeToBlobURL(src.coreJs, 'text/javascript');
           status(`下载 WASM 核心字节码 (${src.name})…`, 'wasm');
-          const coreURL = await toBlobURL(src.coreJs, 'text/javascript');
-          const wasmURL = await toBlobURL(src.coreWasm, 'application/wasm', true, (progress) => {
-            if (progress && progress.total > 0) {
-              const pct = Math.round((progress.received / progress.total) * 100);
+          const wasmURL = await safeToBlobURL(src.coreWasm, 'application/wasm', (progress) => {
+            if (progress) {
               const mb = (progress.received / (1024 * 1024)).toFixed(1);
-              const totalMb = (progress.total / (1024 * 1024)).toFixed(1);
-              status(`WASM 核心下载中 ${pct}% (${mb}/${totalMb}MB)…`, 'wasm');
+              let pctText = '';
+              if (progress.total > 0 && progress.total >= progress.received) {
+                const pct = Math.round((progress.received / progress.total) * 100);
+                pctText = ` ${pct}%`;
+              }
+              status(`WASM 核心下载中${pctText} (${mb}MB)…`, 'wasm');
             }
           });
           status('正在初始化 WASM 运行时…', 'wasm');
@@ -905,6 +955,15 @@ registerProcessor('pcm-ring-buffer-processor', PcmRingBufferProcessor);
         }
         if (state.workletNode) {
           state.workletNode.port.postMessage({ type: 'push', left, right });
+        } else if (state.audioCtx && state.audioInput) {
+          const ctx = state.audioCtx;
+          const audioBuf = ctx.createBuffer(2, sampleCount, 48000);
+          audioBuf.copyToChannel(left, 0);
+          audioBuf.copyToChannel(right, 1);
+          const src = ctx.createBufferSource();
+          src.buffer = audioBuf;
+          src.connect(state.audioInput);
+          src.start(0);
         }
         state.audioBasePtsUs = 0;
         state.audioBaseCtxTime = state.audioCtx ? state.audioCtx.currentTime : 0;
@@ -960,8 +1019,17 @@ registerProcessor('pcm-ring-buffer-processor', PcmRingBufferProcessor);
       } catch (_) {}
     }
 
-    status('FFmpeg.wasm 逐帧软解 (RGBA ➔ Canvas/WebGL + WebAudio PCM)', 'wasm');
+    status('FFmpeg.wasm 逐帧软解 (RGBA ➔ Canvas/WebGL + AudioWorklet PCM)', 'wasm');
     console.log(`[CarMedia] FFmpeg.wasm 逐帧软解就绪: ${totalFrames} 帧 rawvideo RGBA (${targetW}x${targetH}) ➔ Canvas/WebGL`);
+
+    // 立即上屏第 1 帧，杜绝黑屏等待
+    if (state.wasmFrames.length > 0) {
+      state.wasmFrameIdx = 0;
+      if (glRenderer.drawRgba) {
+        glRenderer.drawRgba(state.wasmFrames[0], targetW, targetH);
+      }
+    }
+
     startClock(canvas, glRenderer, generation);
     return true;
   }
@@ -1058,7 +1126,7 @@ registerProcessor('pcm-ring-buffer-processor', PcmRingBufferProcessor);
       try {
         await ffmpeg.exec(['-y', '-i', 'seg.ts', '-vn', '-f', 'f32le', '-ac', '2', '-ar', '48000', 'seg.pcm']);
         const pcmRaw = await ffmpeg.readFile('seg.pcm');
-        if (pcmRaw && pcmRaw.byteLength > 0 && state.workletNode) {
+        if (pcmRaw && pcmRaw.byteLength > 0) {
           const floatView = new Float32Array(pcmRaw.buffer, pcmRaw.byteOffset, pcmRaw.byteLength / 4);
           const sampleCount = floatView.length / 2;
           const left = new Float32Array(sampleCount);
@@ -1067,7 +1135,19 @@ registerProcessor('pcm-ring-buffer-processor', PcmRingBufferProcessor);
             left[i] = floatView[i * 2];
             right[i] = floatView[i * 2 + 1];
           }
-          state.workletNode.port.postMessage({ type: 'push', left, right });
+          if (state.workletNode) {
+            state.workletNode.port.postMessage({ type: 'push', left, right });
+          } else if (state.audioCtx && state.audioInput) {
+            const ctx = state.audioCtx;
+            const audioBuf = ctx.createBuffer(2, sampleCount, 48000);
+            audioBuf.copyToChannel(left, 0);
+            audioBuf.copyToChannel(right, 1);
+            const src = ctx.createBufferSource();
+            src.buffer = audioBuf;
+            src.connect(state.audioInput);
+            const when = Math.max(ctx.currentTime + 0.05, state.audioBaseCtxTime + (seg.startSec - (state.audioBasePtsUs || 0) / 1e6));
+            src.start(when);
+          }
           if (state.audioBasePtsUs === null) {
             state.audioBasePtsUs = seg.startSec * 1e6;
             state.audioBaseCtxTime = state.audioCtx ? state.audioCtx.currentTime : 0;
@@ -1185,6 +1265,14 @@ registerProcessor('pcm-ring-buffer-processor', PcmRingBufferProcessor);
     // 软解首个分片
     await decodeHlsSegment(0, generation);
     if (generation !== state.generation) return false;
+
+    // 立即上屏第 1 帧，杜绝黑屏等待
+    if (state.wasmFrames && state.wasmFrames.length > 0) {
+      state.lastRenderedWasmFrame = state.wasmFrames[0];
+      if (glRenderer.drawRgba) {
+        glRenderer.drawRgba(state.wasmFrames[0].data, targetW, targetH);
+      }
+    }
 
     status('FFmpeg.wasm 逐帧软解 (RGBA ➔ Canvas/WebGL + AudioWorklet PCM)', 'wasm');
     startClock(canvas, glRenderer, generation);
@@ -1327,6 +1415,7 @@ registerProcessor('pcm-ring-buffer-processor', PcmRingBufferProcessor);
   }
 
   window.CarMediaEngine = {
+    safeToBlobURL,
     startWasmStream,
     startWasmHlsDecoder,
     startWasmDecoder,

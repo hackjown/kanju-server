@@ -45,6 +45,11 @@ function createHarness(fetchImpl) {
   const context = {
     console, Promise, Uint8Array, ArrayBuffer, Map, Set, Math, Number, String, Object,
     DOMException, AbortController, setTimeout, clearTimeout,
+    Blob: typeof Blob !== 'undefined' ? Blob : class FakeBlob { constructor(chunks, opts) { this.chunks = chunks; this.type = opts?.type; } },
+    URL: {
+      createObjectURL: (blob) => 'blob:mock/' + Math.random().toString(36).slice(2),
+      revokeObjectURL: () => {}
+    },
     requestAnimationFrame: () => 1, cancelAnimationFrame() {},
     fetch: fetchImpl,
     document: { scripts: [], head: { appendChild() {} }, createElement: () => ({}) , getElementById: () => null },
@@ -198,4 +203,45 @@ test('WASM 全量统一入口 startWasmStream 导出与 M3U8 流媒体软解支�
   const harness = createHarness(async () => ({ ok: true, status: 200 }));
   assert.equal(typeof harness.engine.startWasmStream, 'function');
   assert.equal(typeof harness.engine.startWasmHlsDecoder, 'function');
+});
+
+test('safeToBlobURL 即使在 gzip 解压导致 Content-Length 与实际字节数不一致时也能稳定成功 (杜绝 body stream already read 崩溃)', async () => {
+  // 模拟 gzip 压缩场景：Content-Length 为 88 (压缩大小)，但实际流吐出 300 字节 (解压大小)
+  const chunks = [
+    new Uint8Array(100).fill(1),
+    new Uint8Array(100).fill(2),
+    new Uint8Array(100).fill(3)
+  ];
+  let chunkIdx = 0;
+
+  const mockFetch = async () => ({
+    ok: true,
+    status: 200,
+    headers: {
+      get: (h) => (h.toLowerCase() === 'content-length' ? '88' : null)
+    },
+    body: {
+      getReader: () => ({
+        read: async () => {
+          if (chunkIdx < chunks.length) {
+            return { done: false, value: chunks[chunkIdx++] };
+          }
+          return { done: true, value: undefined };
+        }
+      })
+    }
+  });
+
+  const harness = createHarness(mockFetch);
+  const progressEvents = [];
+  const blobUrl = await harness.engine.safeToBlobURL('https://mock/ffmpeg-core.wasm', 'application/wasm', (p) => {
+    progressEvents.push(p);
+  });
+
+  assert.ok(blobUrl);
+  assert.ok(blobUrl.startsWith('blob:'));
+  assert.ok(progressEvents.length >= 3);
+  const lastEvent = progressEvents[progressEvents.length - 1];
+  assert.equal(lastEvent.done, true);
+  assert.equal(lastEvent.received, 300);
 });

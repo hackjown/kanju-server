@@ -178,9 +178,16 @@
       background: #000;
     }
 
-    /* 隐藏的解码视频源 */
+    /* 隐藏的解码视频源 (必须保持渲染上下文，不可使用 display:none，否则浏览器会切断硬件帧纹理流水线导致黑屏) */
     #hidden-video {
-      display: none;
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 1px;
+      height: 1px;
+      opacity: 0.001;
+      pointer-events: none;
+      z-index: -9999;
     }
 
     /* 浮动 HUD 交互层 */
@@ -843,6 +850,10 @@
     }
 
     function setupWebGLShaders() {
+      if (glProgram) {
+        gl.useProgram(glProgram);
+        return;
+      }
       const vsSrc = `
         attribute vec2 aPosition;
         attribute vec2 aTexCoord;
@@ -961,13 +972,18 @@
       uContrastLoc = gl.getUniformLocation(glProgram, 'uContrast');
     }
 
-    // 给独立 WebCodecs 引擎使用的统一帧渲染接口（VideoFrame / HTMLVideoElement 均可作为纹理源）。
+    // 给独立 WebCodecs / WASM 引擎使用的统一帧渲染接口（VideoFrame / HTMLVideoElement / RGBA Uint8Array 均可作为纹理源）。
     const carFrameRenderer = {
       resize(width, height) {
+        if (canvas.width !== width || canvas.height !== height) {
+          canvas.width = width;
+          canvas.height = height;
+        }
         if (isWebGl && gl) gl.viewport(0, 0, width, height);
       },
       draw(frameSource) {
         if (isWebGl && gl && glProgram) {
+          gl.useProgram(glProgram);
           gl.bindTexture(gl.TEXTURE_2D, glTex);
           gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, frameSource);
           gl.uniform1i(uColorModeLoc, activeColorMode);
@@ -980,13 +996,24 @@
       },
       drawRgba(pixels, width, height) {
         if (isWebGl && gl && glProgram) {
+          gl.useProgram(glProgram);
+          if (canvas.width !== width || canvas.height !== height) {
+            canvas.width = width;
+            canvas.height = height;
+            gl.viewport(0, 0, width, height);
+          }
           gl.bindTexture(gl.TEXTURE_2D, glTex);
+          gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
           gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, width, height, 0, gl.RGBA, gl.UNSIGNED_BYTE, pixels);
           gl.uniform1i(uColorModeLoc, activeColorMode);
           gl.uniform1f(uBrightnessLoc, userBrightness);
           gl.uniform1f(uContrastLoc, userContrast);
           gl.drawArrays(gl.TRIANGLES, 0, 6);
         } else if (ctx2d) {
+          if (canvas.width !== width || canvas.height !== height) {
+            canvas.width = width;
+            canvas.height = height;
+          }
           const imgData = new ImageData(new Uint8ClampedArray(pixels.buffer, pixels.byteOffset, pixels.byteLength), width, height);
           ctx2d.putImageData(imgData, 0, 0);
         }
@@ -1572,6 +1599,10 @@
       document.getElementById('player-view').style.display = 'block';
 
       initCanvasRenderer();
+      initWebAudio();
+      if (audioCtx && audioCtx.state === 'suspended') {
+        audioCtx.resume().catch(() => {});
+      }
       initWakeLock();
       renderFrameLoop();
 
@@ -1613,6 +1644,10 @@
       document.getElementById('player-view').style.display = 'block';
 
       initCanvasRenderer();
+      initWebAudio();
+      if (audioCtx && audioCtx.state === 'suspended') {
+        audioCtx.resume().catch(() => {});
+      }
       initWakeLock();
       renderFrameLoop();
 
