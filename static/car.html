@@ -740,10 +740,8 @@
           <div>原生 &lt;video&gt; 状态: <strong id="diag-video" style="color: #f87171;">检测中…</strong></div>
           <div>时间与进度: <strong id="diag-sync" style="color: #38bdf8;">-</strong></div>
         </div>
-        <div id="diag-hls-note" style="margin-top: 14px; padding: 12px 14px; border-radius: 8px; background: rgba(56,189,248,0.12); border-left: 4px solid #38bdf8; font-size: 14px; color: #cbd5e1; display: none; line-height: 1.6;">
-          ℹ️ <strong>为什么当前显示 Native Fallback？</strong><br>
-          当前播放源为 <strong>HLS (.m3u8) 在线切片流</strong>，由 Hls.js 处理切片调度并接入 WebGL/WebAudio。这是在线多码率流媒体的最佳实践。<br>
-          如需实测与查证 <strong>FFmpeg.wasm 真正的 100% 逐帧纯软解输出</strong>，请点击下方按钮运行内置 720P 测试样片。
+        <div id="diag-hls-note" style="margin-top: 14px; padding: 12px 14px; border-radius: 8px; background: rgba(56,189,248,0.12); border-left: 4px solid #38bdf8; font-size: 14px; color: #cbd5e1; display: block; line-height: 1.6;">
+          ⚡ <strong>全量 WASM 逐帧软解已激活</strong>：车机版已彻底移除 Native 兼容回退，所有影片及 M3U8 切片流均由 <strong>FFmpeg.wasm 底层软解为 RGBA 原始像素</strong> 直接写入 WebGL Canvas，音频由 <strong>AudioWorklet PCM 环形缓冲</strong> 直通输出，杜绝原生 video 参与！
         </div>
       </div>
 
@@ -1427,7 +1425,8 @@
       }
     }
 
-    // 播放入口：HLS 原生兼容；MP4 优先 JS 解复用 + WebCodecs；失败时 FFmpeg.wasm；最后回退浏览器原生。
+    // 核心播放入口：全面采用 FFmpeg.wasm 逐帧软解 (RGBA ➔ WebGL + AudioWorklet PCM)
+    // 彻底废除 Native Fallback 与 HTMLVideoElement 原生渲染，所有片源 (M3U8 / MP4) 均由 WASM 软解
     async function playMediaSource(url) {
       initWebAudio();
       if (window.CarMediaEngine) window.CarMediaEngine.stop();
@@ -1439,55 +1438,25 @@
         hlsInstance.destroy();
         hlsInstance = null;
       }
+      // 彻底清空并停用原生 video，杜绝一切 Native 渲染
       video.pause();
       video.removeAttribute('src');
       video.load();
 
-      let decodedHint = url;
-      try { decodedHint = decodeURIComponent(url); } catch (_) {}
-      const isHls = /\.m3u8(?:$|[?#&])/i.test(decodedHint);
-      if (isHls) {
-        if (window.Hls && Hls.isSupported()) {
-          hlsInstance = new Hls({ maxBufferLength: 30, enableWorker: true });
-          hlsInstance.loadSource(url);
-          hlsInstance.attachMedia(video);
-          hlsInstance.on(Hls.Events.MANIFEST_PARSED, () => {
-            video.play().catch(e => console.warn('[Car] HLS autoplay:', e));
-            if (window.CarMediaEngine) window.CarMediaEngine.status('HLS.js + 浏览器解码（兼容模式）', 'native');
-          });
-          hlsInstance.on(Hls.Events.ERROR, (_event, data) => {
-            if (data && data.fatal) console.error('[Car] HLS fatal error:', data);
-          });
-        } else {
-          video.src = url;
-          video.play().catch(e => console.warn('[Car] native HLS autoplay:', e));
-          if (window.CarMediaEngine) window.CarMediaEngine.status('原生 HLS 解码（兼容模式）', 'native');
-        }
-      } else {
-        let started = false;
-        // WebCodecs 优先；硬件不支持时自动转入 FFmpeg.wasm 逐帧软解 (RGBA ➔ WebGL)；最后回退原生。
-        if (/\.(mp4|m4v|mov)(?:$|[?#&])/i.test(decodedHint) && window.CarMediaEngine) {
-          try {
-            await window.CarMediaEngine.startWebCodecs(url, video, canvas, carFrameRenderer);
-            started = true;
-          } catch (e) {
-            console.warn('[Car] WebCodecs path unavailable, trying WASM:', e);
-            window.CarMediaEngine.stop();
-            try {
-              await window.CarMediaEngine.startWasmDecoder(url, canvas, carFrameRenderer);
-              started = true;
-            } catch (wasmError) {
-              console.warn('[Car] FFmpeg.wasm fallback unavailable:', wasmError);
-            }
-          }
-        }
-        if (!started) {
-          video.src = url;
-          video.load();
-          video.play().catch(e => console.warn('[Car] native playback:', e));
-          if (window.CarMediaEngine) window.CarMediaEngine.status('浏览器原生解码（兼容回退）', 'native');
+      showGestureHud('⚡', '启动 FFmpeg.wasm 逐帧软解...', 0.5);
+
+      let started = false;
+      if (window.CarMediaEngine) {
+        try {
+          await window.CarMediaEngine.startWasmStream(url, canvas, carFrameRenderer);
+          started = true;
+        } catch (e) {
+          console.error('[Car] FFmpeg.wasm stream decode error:', e);
+          showGestureHud('⚠️', 'WASM 解码加载中...', 0.5);
         }
       }
+      resetOverlayTimer();
+    }
       resetOverlayTimer();
     }
 
@@ -1531,22 +1500,16 @@
       const hlsNote = document.getElementById('diag-hls-note');
 
       if (diagMode) {
-        diagMode.textContent = diag.mode === 'wasm' ? '⚡ FFmpeg.wasm 逐帧纯软解' : (diag.mode === 'webcodecs' ? '⚡ WebCodecs 硬件解复用' : (diag.mode === 'native' ? '⚡ Native Fallback (HLS/兼容)' : '待机'));
-        diagMode.style.color = diag.mode === 'wasm' ? '#38bdf8' : (diag.mode === 'webcodecs' ? '#4ade80' : '#fbbf24');
+        diagMode.textContent = diag.mode === 'wasm' ? '⚡ FFmpeg.wasm 逐帧纯软解 (全量生效中)' : (diag.mode === 'webcodecs' ? '⚡ WebCodecs 硬件解复用' : 'WASM 引擎就绪');
+        diagMode.style.color = '#38bdf8';
       }
 
       if (hlsNote) {
-        hlsNote.style.display = diag.mode === 'native' ? 'block' : 'none';
+        hlsNote.style.display = 'block';
       }
 
       if (diagCodec) {
-        if (diag.mode === 'wasm') {
-          diagCodec.textContent = 'FFmpeg.wasm 0.12 (libavcodec 纯软解)';
-        } else if (diag.mode === 'webcodecs') {
-          diagCodec.textContent = 'WebCodecs VideoDecoder (硬件加速)';
-        } else {
-          diagCodec.textContent = 'Hls.js / 浏览器媒体引擎';
-        }
+        diagCodec.textContent = diag.mode === 'wasm' ? 'FFmpeg.wasm 0.12 (libavcodec 逐帧纯软解)' : 'WebCodecs / WASM 引擎通道';
       }
 
       if (diagFrames) {

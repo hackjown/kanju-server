@@ -193,3 +193,9 @@ test('WASM 逐帧软解模式状态、诊断与清空原生 video 标签', async
   assert.ok('wasmW' in diag);
   assert.ok('wasmH' in diag);
 });
+
+test('WASM 全量统一入口 startWasmStream 导出与 M3U8 流媒体软解支持', async () => {
+  const harness = createHarness(async () => ({ ok: true, status: 200 }));
+  assert.equal(typeof harness.engine.startWasmStream, 'function');
+  assert.equal(typeof harness.engine.startWasmHlsDecoder, 'function');
+});

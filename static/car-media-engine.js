@@ -147,7 +147,11 @@ registerProcessor('pcm-ring-buffer-processor', PcmRingBufferProcessor);
     wasmFrameIdx: 0,
     wasmW: 0,
     wasmH: 0,
-    masterVideo: null // 兼容 native 模式
+    lastRenderedWasmFrame: null,
+    hlsSegments: null,
+    hlsCurrentSegIdx: 0,
+    hlsDecoding: false,
+    masterVideo: null // 兼容引用
   };
 
   function status(text, mode) {
@@ -157,13 +161,11 @@ registerProcessor('pcm-ring-buffer-processor', PcmRingBufferProcessor);
     const badge = document.getElementById('badge-engine');
     if (badge) {
       badge.textContent = `⚡ ${
-        state.mode === 'webcodecs'
+        state.mode === 'wasm'
+          ? 'FFmpeg.wasm 逐帧软解 + AudioWorklet PCM'
+          : state.mode === 'webcodecs'
           ? 'JS Demux + WebCodecs + AudioWorklet PCM'
-          : state.mode === 'wasm'
-          ? 'FFmpeg.wasm 逐帧软解 + WebAudio'
-          : state.mode === 'native'
-          ? 'Native Fallback + WebAudio'
-          : 'Media Engine'
+          : 'FFmpeg.wasm 逐帧软解'
       }`;
     }
   }
@@ -420,6 +422,10 @@ registerProcessor('pcm-ring-buffer-processor', PcmRingBufferProcessor);
     state.mp4Paused = false;
     state.paused = false;
     state.wasmFrames = null;
+    state.lastRenderedWasmFrame = null;
+    state.hlsSegments = null;
+    state.hlsDecoding = false;
+    state.hlsCurrentSegIdx = 0;
     state.mode = 'idle';
   }
 
@@ -537,29 +543,58 @@ registerProcessor('pcm-ring-buffer-processor', PcmRingBufferProcessor);
         // WASM 逐帧软解输出循环
         let curSec = getCurrentTime();
         if (state.duration > 0 && curSec >= state.duration) {
-          // 循环回放以供持续观测测试
-          state.clockStartPerf = getNowMs();
-          state.clockStartSec = 0;
-          state.wasmFrameIdx = -1;
-          curSec = 0;
-        }
-        const fps = 25;
-        const frameIdx = Math.min(state.wasmFrames.length - 1, Math.max(0, Math.floor(curSec * fps)));
-        if (frameIdx !== state.wasmFrameIdx && state.wasmFrames[frameIdx]) {
-          state.wasmFrameIdx = frameIdx;
-          const frameData = state.wasmFrames[frameIdx];
-          if (glRenderer.drawRgba) {
-            glRenderer.drawRgba(frameData, state.wasmW, state.wasmH);
-          } else {
-            // 兼容普通 WebGL / 2D
-            const imgData = new ImageData(new Uint8ClampedArray(frameData.buffer, frameData.byteOffset, frameData.byteLength), state.wasmW, state.wasmH);
-            createImageBitmap(imgData).then(bmp => {
-              glRenderer.draw(bmp);
-              bmp.close();
-            }).catch(() => {});
+          if (!state.hlsSegments) {
+            // 单文件样片循环回放以供持续观测测试
+            state.clockStartPerf = getNowMs();
+            state.clockStartSec = 0;
+            state.wasmFrameIdx = -1;
+            curSec = 0;
           }
-          const decEl = document.getElementById('stat-decoder');
-          if (decEl) decEl.textContent = `FFmpeg.wasm 软解 (第 ${frameIdx + 1}/${state.wasmFrames.length} 帧 RGBA)`;
+        }
+
+        if (state.wasmFrames.length > 0) {
+          let chosen = null;
+          // 支持切片流式时间戳对象 { time, data } 与索引数组两种结构
+          if (state.wasmFrames[0] && typeof state.wasmFrames[0].time === 'number') {
+            for (let i = 0; i < state.wasmFrames.length; i++) {
+              if (state.wasmFrames[i].time <= curSec + 0.04) {
+                chosen = state.wasmFrames[i];
+              } else {
+                break;
+              }
+            }
+            if (!chosen && state.wasmFrames.length > 0) chosen = state.wasmFrames[0];
+            if (chosen && chosen !== state.lastRenderedWasmFrame) {
+              state.lastRenderedWasmFrame = chosen;
+              if (glRenderer.drawRgba) {
+                glRenderer.drawRgba(chosen.data, state.wasmW, state.wasmH);
+              } else if (glRenderer.draw) {
+                const imgData = new ImageData(new Uint8ClampedArray(chosen.data.buffer, chosen.data.byteOffset, chosen.data.byteLength), state.wasmW, state.wasmH);
+                createImageBitmap(imgData).then(bmp => { glRenderer.draw(bmp); bmp.close(); }).catch(() => {});
+              }
+              const decEl = document.getElementById('stat-decoder');
+              if (decEl) decEl.textContent = `FFmpeg.wasm 软解 (${curSec.toFixed(1)}s · RGBA 1280x720)`;
+            }
+          } else {
+            const fps = 25;
+            const frameIdx = Math.min(state.wasmFrames.length - 1, Math.max(0, Math.floor(curSec * fps)));
+            if (frameIdx !== state.wasmFrameIdx && state.wasmFrames[frameIdx]) {
+              state.wasmFrameIdx = frameIdx;
+              const frameData = state.wasmFrames[frameIdx];
+              if (glRenderer.drawRgba) {
+                glRenderer.drawRgba(frameData, state.wasmW, state.wasmH);
+              } else {
+                // 兼容普通 WebGL / 2D
+                const imgData = new ImageData(new Uint8ClampedArray(frameData.buffer, frameData.byteOffset, frameData.byteLength), state.wasmW, state.wasmH);
+                createImageBitmap(imgData).then(bmp => {
+                  glRenderer.draw(bmp);
+                  bmp.close();
+                }).catch(() => {});
+              }
+              const decEl = document.getElementById('stat-decoder');
+              if (decEl) decEl.textContent = `FFmpeg.wasm 软解 (第 ${frameIdx + 1}/${state.wasmFrames.length} 帧 RGBA)`;
+            }
+          }
         }
       }
 
@@ -899,6 +934,237 @@ registerProcessor('pcm-ring-buffer-processor', PcmRingBufferProcessor);
     return startWasmDecoder(url, document.getElementById('car-canvas'), window.carFrameRenderer || { draw() {} });
   }
 
+  function resolveUrl(relativeUrl, baseUrl) {
+    try {
+      return new URL(relativeUrl, baseUrl).href;
+    } catch (_) {
+      return relativeUrl;
+    }
+  }
+
+  async function parseM3u8Playlist(m3u8Url) {
+    let fetchUrl = m3u8Url;
+    if (fetchUrl.startsWith('http') && !fetchUrl.includes(location.host) && !fetchUrl.includes('127.0.0.1')) {
+      fetchUrl = '/proxy?u=' + encodeURIComponent(fetchUrl);
+    }
+    const res = await fetch(fetchUrl);
+    if (!res.ok) throw new Error(`无法获取 M3U8 列表: HTTP ${res.status}`);
+    const text = await res.text();
+
+    if (text.includes('#EXT-X-STREAM-INF')) {
+      const lines = text.split('\n');
+      let targetVariantUrl = null;
+      for (let i = 0; i < lines.length; i++) {
+        const line = lines[i].trim();
+        if (line.startsWith('#EXT-X-STREAM-INF')) {
+          for (let j = i + 1; j < lines.length; j++) {
+            const nextLine = lines[j].trim();
+            if (nextLine && !nextLine.startsWith('#')) {
+              targetVariantUrl = resolveUrl(nextLine, m3u8Url);
+              break;
+            }
+          }
+          if (targetVariantUrl) break;
+        }
+      }
+      if (targetVariantUrl) {
+        return parseM3u8Playlist(targetVariantUrl);
+      }
+    }
+
+    const lines = text.split('\n');
+    const segments = [];
+    let curDuration = 5.0;
+    let totalSec = 0;
+
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i].trim();
+      if (line.startsWith('#EXTINF:')) {
+        const match = line.match(/#EXTINF:([\d.]+)/);
+        if (match) curDuration = parseFloat(match[1]) || 5.0;
+      } else if (line && !line.startsWith('#')) {
+        let segUrl = resolveUrl(line, m3u8Url);
+        if (segUrl.startsWith('http') && !segUrl.includes(location.host) && !segUrl.includes('127.0.0.1')) {
+          segUrl = '/proxy?u=' + encodeURIComponent(segUrl);
+        }
+        segments.push({
+          url: segUrl,
+          duration: curDuration,
+          startSec: totalSec,
+          endSec: totalSec + curDuration
+        });
+        totalSec += curDuration;
+      }
+    }
+
+    return { segments, totalSec };
+  }
+
+  async function decodeHlsSegment(segIdx, generation) {
+    if (generation !== state.generation || !state.hlsSegments || segIdx >= state.hlsSegments.length) return false;
+    const seg = state.hlsSegments[segIdx];
+    status(`FFmpeg.wasm 软解分片 ${segIdx + 1}/${state.hlsSegments.length}…`, 'wasm');
+
+    try {
+      const res = await fetch(seg.url);
+      if (!res.ok) throw new Error(`切片下载失败 HTTP ${res.status}`);
+      const segBytes = new Uint8Array(await res.arrayBuffer());
+      if (generation !== state.generation) return false;
+
+      const ffmpeg = await ensureFFmpeg();
+      await ffmpeg.writeFile('seg.ts', segBytes);
+
+      // 1. 抽取音频至 Float32 PCM
+      try {
+        await ffmpeg.exec(['-y', '-i', 'seg.ts', '-vn', '-f', 'f32le', '-ac', '2', '-ar', '48000', 'seg.pcm']);
+        const pcmRaw = await ffmpeg.readFile('seg.pcm');
+        if (pcmRaw && pcmRaw.byteLength > 0 && state.workletNode) {
+          const floatView = new Float32Array(pcmRaw.buffer, pcmRaw.byteOffset, pcmRaw.byteLength / 4);
+          const sampleCount = floatView.length / 2;
+          const left = new Float32Array(sampleCount);
+          const right = new Float32Array(sampleCount);
+          for (let i = 0; i < sampleCount; i++) {
+            left[i] = floatView[i * 2];
+            right[i] = floatView[i * 2 + 1];
+          }
+          state.workletNode.port.postMessage({ type: 'push', left, right });
+          if (state.audioBasePtsUs === null) {
+            state.audioBasePtsUs = seg.startSec * 1e6;
+            state.audioBaseCtxTime = state.audioCtx ? state.audioCtx.currentTime : 0;
+          }
+        }
+      } catch (pcmErr) {
+        console.warn('[CarMedia] PCM extraction:', pcmErr);
+      }
+
+      // 2. 逐帧软解视频至 1280x720 RGBA rawvideo
+      const targetW = state.wasmW || 1280;
+      const targetH = state.wasmH || 720;
+      await ffmpeg.exec([
+        '-y',
+        '-i', 'seg.ts',
+        '-an',
+        '-f', 'rawvideo',
+        '-pix_fmt', 'rgba',
+        '-s', `${targetW}x${targetH}`,
+        '-r', '25',
+        'seg.rgba'
+      ]);
+
+      const videoRaw = await ffmpeg.readFile('seg.rgba');
+      const frameByteSize = targetW * targetH * 4;
+      const totalFrames = Math.floor(videoRaw.byteLength / frameByteSize);
+
+      for (let f = 0; f < totalFrames; f++) {
+        const frameData = videoRaw.subarray(f * frameByteSize, (f + 1) * frameByteSize);
+        const frameTime = seg.startSec + (f / 25);
+        if (!state.wasmFrames) state.wasmFrames = [];
+        state.wasmFrames.push({
+          time: frameTime,
+          data: frameData
+        });
+      }
+
+      // 清理临时文件避免虚拟 FS 内存溢出
+      try {
+        await ffmpeg.deleteFile('seg.ts');
+        await ffmpeg.deleteFile('seg.pcm');
+        await ffmpeg.deleteFile('seg.rgba');
+      } catch (_) {}
+
+      state.hlsCurrentSegIdx = segIdx + 1;
+      return true;
+    } catch (e) {
+      console.warn(`[CarMedia] 分片 ${segIdx} 解码异常:`, e);
+      state.hlsCurrentSegIdx = segIdx + 1;
+      return false;
+    }
+  }
+
+  async function pipelineHlsSegments(generation) {
+    if (state.hlsDecoding || generation !== state.generation || state.mode !== 'wasm') return;
+    state.hlsDecoding = true;
+
+    while (generation === state.generation && state.mode === 'wasm' && state.hlsSegments) {
+      const curTime = getCurrentTime();
+      const lastBufferedTime = state.wasmFrames && state.wasmFrames.length > 0 
+        ? state.wasmFrames[state.wasmFrames.length - 1].time 
+        : curTime;
+
+      if (lastBufferedTime < curTime + 10 && state.hlsCurrentSegIdx < state.hlsSegments.length) {
+        await decodeHlsSegment(state.hlsCurrentSegIdx, generation);
+      } else {
+        await new Promise(r => setTimeout(r, 600));
+      }
+
+      // 内存修剪：丢弃已播放 2 秒前的帧，控制内存平稳在 150MB 左右
+      if (state.wasmFrames && state.wasmFrames.length > 75) {
+        while (state.wasmFrames.length > 40 && state.wasmFrames[0].time < curTime - 2.0) {
+          state.wasmFrames.shift();
+        }
+      }
+    }
+    state.hlsDecoding = false;
+  }
+
+  async function startWasmHlsDecoder(url, canvas, glRenderer) {
+    stop();
+    const generation = state.generation;
+    status('正在加载 FFmpeg.wasm 核心…', 'wasm');
+    const ffmpeg = await ensureFFmpeg();
+    if (generation !== state.generation) return false;
+
+    status('解析 M3U8 流媒体切片列表…', 'wasm');
+    const { segments, totalSec } = await parseM3u8Playlist(url);
+    if (!segments || !segments.length) throw new Error('未检索到有效 M3U8 分片');
+
+    state.hlsSegments = segments;
+    state.hlsCurrentSegIdx = 0;
+    state.duration = totalSec;
+    state.wasmFrames = [];
+    const targetW = 1280, targetH = 720;
+    state.wasmW = targetW;
+    state.wasmH = targetH;
+    state.wasmFrameIdx = -1;
+
+    canvas.width = targetW;
+    canvas.height = targetH;
+    if (glRenderer.resize) glRenderer.resize(targetW, targetH);
+
+    // 彻底停用原生 video
+    const vid = state.masterVideo || document.getElementById('hidden-video') || (typeof document !== 'undefined' ? document.querySelector('video') : null);
+    if (vid) {
+      try {
+        if (typeof vid.pause === 'function') vid.pause();
+        if (typeof vid.removeAttribute === 'function') vid.removeAttribute('src');
+        else vid.src = '';
+        if (typeof vid.load === 'function') vid.load();
+      } catch (_) {}
+    }
+
+    // 软解首个分片
+    await decodeHlsSegment(0, generation);
+    if (generation !== state.generation) return false;
+
+    status('FFmpeg.wasm 逐帧软解 (RGBA ➔ Canvas/WebGL + AudioWorklet PCM)', 'wasm');
+    startClock(canvas, glRenderer, generation);
+
+    // 开启连续后台切片解码管道
+    pipelineHlsSegments(generation);
+    return true;
+  }
+
+  // 核心统一调用入口：无论是 M3U8 还是 MP4，全面使用 WASM 逐帧软解
+  async function startWasmStream(url, canvas, glRenderer) {
+    let decodedHint = url;
+    try { decodedHint = decodeURIComponent(url); } catch (_) {}
+    const isHls = /\.m3u8(?:$|[?#&])/i.test(decodedHint);
+    if (isHls) {
+      return startWasmHlsDecoder(url, canvas, glRenderer);
+    }
+    return startWasmDecoder(url, canvas, glRenderer);
+  }
+
   // ================= 播放控制：强化 Seek 与音画同步 =================
   function seekTo(seconds) {
     const target = Math.max(0, Math.min(state.duration || 3600, Number(seconds) || 0));
@@ -935,9 +1201,27 @@ registerProcessor('pcm-ring-buffer-processor', PcmRingBufferProcessor);
         return false;
       }
     } else if (state.mode === 'wasm') {
-      state.wasmFrameIdx = Math.floor(target * 25);
-      state.clockStartPerf = getNowMs();
+      state.pauseTime = target;
       state.clockStartSec = target;
+      state.clockStartPerf = getNowMs();
+      state.wasmFrameIdx = Math.floor(target * 25);
+      if (state.workletNode) {
+        state.workletNode.port.postMessage({ type: 'reset' });
+      }
+      state.wasmFrames = [];
+      state.lastRenderedWasmFrame = null;
+
+      if (state.hlsSegments && state.hlsSegments.length > 0) {
+        let segIdx = 0;
+        for (let i = 0; i < state.hlsSegments.length; i++) {
+          if (target >= state.hlsSegments[i].startSec && target < state.hlsSegments[i].endSec) {
+            segIdx = i;
+            break;
+          }
+        }
+        state.hlsCurrentSegIdx = segIdx;
+        decodeHlsSegment(segIdx, state.generation);
+      }
       return true;
     } else if (state.mode === 'native' && state.masterVideo) {
       state.masterVideo.currentTime = target;
@@ -1003,8 +1287,10 @@ registerProcessor('pcm-ring-buffer-processor', PcmRingBufferProcessor);
   }
 
   window.CarMediaEngine = {
-    startWebCodecs,
+    startWasmStream,
+    startWasmHlsDecoder,
     startWasmDecoder,
+    startWebCodecs,
     transcodeWithWasm,
     stop,
     play,
