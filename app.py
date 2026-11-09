@@ -7,7 +7,7 @@
 import os, json, time, hmac, hashlib, secrets, threading, re, urllib.parse, functools
 
 import requests
-from flask import Flask, jsonify, request, send_from_directory, Response
+from flask import Flask, jsonify, request, send_from_directory, Response, make_response
 
 KEY = "557d0e4ae929f438da6bd84412374e6086b8af09b3fed54bf22601d5bf8c54a0"
 BASES = ["https://kanju26.com", "https://kanju1.ai", "https://kanju13.com"]
@@ -1395,7 +1395,7 @@ def api_home_rails():
 def car_page(p=None):
     if request.args.get("legacy") == "1":
         return send_from_directory(os.path.join(HERE, "static"), "tesla.html")
-    resp = make_response(send_from_directory(os.path.join(HERE, "static"), "car.html"))
+    resp = send_from_directory(os.path.join(HERE, "static"), "car.html")
     resp.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
     resp.headers["Pragma"] = "no-cache"
     resp.headers["Expires"] = "0"
