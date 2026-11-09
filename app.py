@@ -25,7 +25,18 @@ def _ensure_cache_seeds():
         for fn in ["home.json", "bootstrap.json", "rank_hot.json"]:
             dst = os.path.join(CACHE_DIR, fn)
             src = os.path.join(seeds_dir, fn)
-            if not os.path.exists(dst) and os.path.exists(src):
+            if not os.path.exists(src):
+                continue
+            need_copy = not os.path.exists(dst)
+            if not need_copy and fn == "home.json":
+                try:
+                    with open(dst, "r", encoding="utf-8") as f:
+                        d = json.load(f)
+                        if not isinstance(d, dict) or len(d.get("sections", [])) < 8:
+                            need_copy = True
+                except Exception:
+                    need_copy = True
+            if need_copy:
                 import shutil
                 shutil.copyfile(src, dst)
     except Exception:
@@ -645,7 +656,7 @@ def proxy():
     is_m3u8_url = ".m3u8" in pu.path or "m3u8" in request.args.get("format", "")
 
     try:
-        r = requests.get(u, headers=h, timeout=30, allow_redirects=True, stream=not is_m3u8_url)
+        r = _sess.get(u, headers=h, timeout=30, allow_redirects=True, stream=not is_m3u8_url)
     except Exception as e:
         return "upstream error %s" % e, 502
 
@@ -685,7 +696,7 @@ def proxy():
             hdr[fwd] = r.headers[fwd]
 
     def gen():
-        for chunk in r.iter_content(65536):
+        for chunk in r.iter_content(262144):
             if chunk:
                 yield chunk
     return Response(gen(), status=r.status_code, headers=hdr)
@@ -1769,7 +1780,7 @@ def proxy_v1(subpath):
         resp.headers["Access-Control-Allow-Origin"] = "*"
         return resp
 
-    # 0. 首页信息流：支持无限滚动分页 + 毫秒级全栏目种子容灾 + 低延迟上游探测
+    # 0. 首页信息流：支持全量11大栏目毫秒级快速直出 + 离线全量兜底 + 低延迟上游探测
     if subpath.startswith("feed/home") and request.method == "GET":
         cursor = request.args.get("cursor")
         if cursor:
@@ -1777,7 +1788,7 @@ def proxy_v1(subpath):
             qs = request.query_string.decode("utf-8")
             full_path = "/v1/" + subpath + (f"?{qs}" if qs else "")
             st, r = up_req(request.method, full_path, timeout=5)
-            if st == 200 and isinstance(r, dict):
+            if st == 200 and isinstance(r, dict) and r.get("sections"):
                 clean_experience_ads(r)
                 resp = jsonify(r)
                 resp.status_code = 200
@@ -1785,27 +1796,31 @@ def proxy_v1(subpath):
             # 上游分页暂无或超时，返回安全空分页结构，杜绝前端弹出“推荐分页暂未更新”错误
             return jsonify({"object": "home.feed", "sections": [], "next_cursor": None})
 
-        # 0.2 首页初始流：
+        # 0.2 首页初始流：全量11大栏目（电影、电视剧、美剧、日韩、动漫等）毫秒级秒出
         cache_file = os.path.join(CACHE_DIR, "home.json")
         seed_file = os.path.join(HERE, "seeds", "home.json")
         cached_data = None
-        now_ts = time.time()
         for fp in [cache_file, seed_file]:
             if os.path.exists(fp):
                 try:
                     with open(fp, "r", encoding="utf-8") as f:
                         d = json.load(f)
-                        if isinstance(d, dict) and d.get("sections") and len(d["sections"]) >= 5:
+                        if isinstance(d, dict) and d.get("sections") and len(d["sections"]) >= 8:
                             cached_data = d
                             break
                 except Exception:
                     pass
 
-        # 优先快速探测上游（3秒低延迟，成功则更新本地缓存）
-        qs = request.query_string.decode("utf-8")
-        full_path = "/v1/" + subpath + (f"?{qs}" if qs else "")
-        st, r = up_req(request.method, full_path, timeout=3)
-        if st == 200 and isinstance(r, dict) and r.get("sections") and len(r["sections"]) >= 5:
+        # 优先毫秒级直出全量栏目（杜绝前端8秒白屏、仅有3个栏目与分页中断报错）
+        if cached_data:
+            clean_experience_ads(cached_data)
+            resp = jsonify(cached_data)
+            resp.status_code = 200
+            return resp
+
+        # 若本地未初始化，快速探测上游（请求全量 15 个栏目）
+        st, r = up_req("GET", "/v1/feed/home?scope=public&mode=preview&sections=15&cards=12", timeout=4)
+        if st == 200 and isinstance(r, dict) and r.get("sections") and len(r["sections"]) >= 8:
             clean_experience_ads(r)
             try:
                 with open(cache_file, "w", encoding="utf-8") as f:
@@ -1813,13 +1828,6 @@ def proxy_v1(subpath):
             except Exception:
                 pass
             resp = jsonify(r)
-            resp.status_code = 200
-            return resp
-
-        # 上游慢或网络抖动时：毫秒级秒级回退至本地 8 大完整栏目（电影、电视剧、美剧、动漫等全量容灾数据）
-        if cached_data:
-            clean_experience_ads(cached_data)
-            resp = jsonify(cached_data)
             resp.status_code = 200
             return resp
 
@@ -2311,7 +2319,7 @@ def proxy_v1(subpath):
 
         # 0. 首页信息流容灾与种子保障（杜绝上游 502/超时导致首页出现“首页内容暂时无法加载”）
         if subpath.startswith("feed/home"):
-            if st == 200 and isinstance(r, dict) and r.get("sections"):
+            if st == 200 and isinstance(r, dict) and r.get("sections") and len(r["sections"]) >= 8:
                 try:
                     with open(os.path.join(CACHE_DIR, "home.json"), "w", encoding="utf-8") as f:
                         json.dump(r, f, ensure_ascii=False)

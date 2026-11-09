@@ -560,6 +560,12 @@
       <div class="shelf-title">🎭 海外精选好剧</div>
       <div class="car-card-grid" id="anime-grid"></div>
     </div>
+
+    <!-- 栏目 5: 院线热映与高分电影 -->
+    <div class="shelf-section" id="shelf-movie-wrap">
+      <div class="shelf-title">🎬 院线热映与高分电影（4K 臻彩影院）</div>
+      <div class="car-card-grid" id="movie-grid"></div>
+    </div>
   </main>
 
   <!-- 2. 核心独立车机播放器 (Canvas + WebAudio) -->
@@ -1548,6 +1554,16 @@
           animeGrid.innerHTML = '';
           (sections[2].cards || []).slice(0, 18).forEach(item => {
             if (!isJunkOrSport(item)) animeGrid.appendChild(createCarCard(item));
+          });
+        }
+
+        // 栏目 5: 院线热映与高分电影
+        const movieSec = sections.find(s => (s.title || '').includes('电影')) || (sections.length > 5 ? sections[5] : null);
+        if (movieSec) {
+          const movieGrid = document.getElementById('movie-grid');
+          movieGrid.innerHTML = '';
+          (movieSec.cards || []).slice(0, 18).forEach(item => {
+            if (!isJunkOrSport(item)) movieGrid.appendChild(createCarCard(item));
           });
         }
       } catch (e) {
