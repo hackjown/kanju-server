@@ -162,14 +162,19 @@
       background: rgba(0, 229, 255, 0.1);
     }
 
-    /* 播放器容器与视频解码层 */
+    /* 播放器容器与视频解码层 (真正 100% 全屏沉浸式无遮挡) */
     #player-view {
       display: none;
-      position: relative;
+      position: fixed;
+      top: 0;
+      left: 0;
+      right: 0;
+      bottom: 0;
       width: 100vw;
-      height: calc(100vh - 66px);
+      height: 100vh;
       background: #000;
       overflow: hidden;
+      z-index: 50;
     }
 
     .canvas-container {
@@ -530,24 +535,38 @@
 
     .quick-tags {
       display: flex;
-      gap: 10px;
+      gap: 12px;
       overflow-x: auto;
-      padding-bottom: 16px;
+      padding-bottom: 14px;
       margin-bottom: 24px;
+      scrollbar-width: none;
+    }
+    .quick-tags::-webkit-scrollbar {
+      display: none;
     }
     .quick-tag {
       background: #141824;
-      border: 1px solid var(--border-dark);
-      padding: 8px 18px;
+      border: 1.5px solid var(--border-dark);
+      padding: 9px 22px;
       border-radius: 999px;
       font-size: 16px;
-      font-weight: 600;
+      font-weight: 700;
       cursor: pointer;
       white-space: nowrap;
+      transition: all 0.15s ease-out;
+      user-select: none;
     }
     .quick-tag:active {
+      transform: scale(0.96);
+      border-color: var(--accent-cyan);
+    }
+    .quick-tag.active {
+      background: rgba(0, 229, 255, 0.18);
       border-color: var(--accent-cyan);
       color: var(--accent-cyan);
+      font-weight: 800;
+      box-shadow: 0 0 12px var(--accent-cyan-glow);
+    }
     }
 
     /* 栏目与卡片网格系统 */
@@ -612,7 +631,7 @@
 <body>
 
   <!-- 车机顶部状态栏 -->
-  <header class="car-hud-header">
+  <header class="car-hud-header" id="car-header">
     <div class="car-brand">
       <span>🚗 剧场8<b>AI</b></span>
       <span class="logo-badge">极速车机版</span>
@@ -632,15 +651,15 @@
       <button class="btn-car primary" onclick="runCarSearch()">立即检索</button>
     </div>
 
-    <!-- 快捷热门搜索词 -->
-    <div class="quick-tags">
-      <div class="quick-tag" onclick="quickSearch('庆余年')">🔥 庆余年</div>
-      <div class="quick-tag" onclick="quickSearch('周处除三害')">🎬 周处除三害</div>
-      <div class="quick-tag" onclick="quickSearch('给阿嬷的情书')">💌 给阿嬷的情书</div>
-      <div class="quick-tag" onclick="quickSearch('疯狂动物城')">🦊 疯狂动物城</div>
-      <div class="quick-tag" onclick="quickSearch('繁花')">✨ 繁花</div>
-      <div class="quick-tag" onclick="quickSearch('空枪')">🎯 空枪 (杜比测试)</div>
-      <div class="quick-tag" onclick="quickSearch('哪吒')">🔥 哪吒之魔童闹海</div>
+    <!-- 顶部影视分类导航条 -->
+    <div class="quick-tags" id="category-bar">
+      <div class="quick-tag active" data-kind="all" onclick="selectCategory('all', this)">🔥 全部精选</div>
+      <div class="quick-tag" data-kind="movie" onclick="selectCategory('movie', this)">🎬 电影</div>
+      <div class="quick-tag" data-kind="series" onclick="selectCategory('series', this)">📺 电视剧</div>
+      <div class="quick-tag" data-kind="variety" onclick="selectCategory('variety', this)">🎤 综艺</div>
+      <div class="quick-tag" data-kind="anime" onclick="selectCategory('anime', this)">🦊 动漫</div>
+      <div class="quick-tag" data-kind="short_drama" onclick="selectCategory('short_drama', this)">📱 短剧</div>
+      <div class="quick-tag" data-kind="rank" onclick="selectCategory('rank', this)">🏆 热播榜</div>
     </div>
 
     <!-- 搜索结果区（若有） -->
@@ -649,40 +668,49 @@
       <div class="car-card-grid" id="search-grid"></div>
     </div>
 
-    <!-- 栏目 1: 大家都在看 (热播精选) -->
-    <div class="shelf-section" id="shelf-popular-wrap">
-      <div class="shelf-title">🌟 大家都在看（车机热推 4K）</div>
-      <div class="car-card-grid" id="home-popular-grid">
-        <div style="color: var(--text-muted); font-size: 18px; padding: 20px;">正在连接精选片库...</div>
+    <!-- 动态分类专区视图 (点击 电影/电视剧/综艺/动漫/短剧/热播榜 时展示) -->
+    <div id="category-results-section" style="display: none; margin-bottom: 30px;">
+      <div class="shelf-title" id="category-title">🎬 电影</div>
+      <div class="car-card-grid" id="category-grid"></div>
+    </div>
+
+    <!-- 默认精选多栏目流（选择“全部精选”时展示） -->
+    <div id="home-shelves-wrap">
+      <!-- 栏目 1: 大家都在看 (热播精选) -->
+      <div class="shelf-section" id="shelf-popular-wrap">
+        <div class="shelf-title">🌟 大家都在看（车机热推 4K）</div>
+        <div class="car-card-grid" id="home-popular-grid">
+          <div style="color: var(--text-muted); font-size: 18px; padding: 20px;">正在连接精选片库...</div>
+        </div>
       </div>
-    </div>
 
-    <!-- 栏目 2: 院线热映与高分电影 -->
-    <div class="shelf-section" id="shelf-movie-wrap">
-      <div class="shelf-title">🎬 院线热映与高分电影（4K 臻彩影院）</div>
-      <div class="car-card-grid" id="movie-grid">
-        <div style="color: var(--text-muted); font-size: 18px; padding: 20px;">正在载入电影库...</div>
+      <!-- 栏目 2: 院线热映与高分电影 -->
+      <div class="shelf-section" id="shelf-movie-wrap">
+        <div class="shelf-title">🎬 院线热映与高分电影（4K 臻彩影院）</div>
+        <div class="car-card-grid" id="movie-grid">
+          <div style="color: var(--text-muted); font-size: 18px; padding: 20px;">正在载入电影库...</div>
+        </div>
       </div>
-    </div>
 
-    <!-- 栏目 3: 车机高分榜 -->
-    <div class="shelf-section" id="shelf-hot-wrap">
-      <div class="shelf-title">🔥 车机高分热播榜（4K 极速蓝光）</div>
-      <div class="car-card-grid" id="hot-grid">
-        <div style="color: var(--text-muted); font-size: 18px; padding: 20px;">正在载入榜单...</div>
+      <!-- 栏目 3: 车机高分榜 -->
+      <div class="shelf-section" id="shelf-hot-wrap">
+        <div class="shelf-title">🔥 车机高分热播榜（4K 极速蓝光）</div>
+        <div class="car-card-grid" id="hot-grid">
+          <div style="color: var(--text-muted); font-size: 18px; padding: 20px;">正在载入榜单...</div>
+        </div>
       </div>
-    </div>
 
-    <!-- 栏目 4: 热门连载剧集 -->
-    <div class="shelf-section" id="shelf-drama-wrap">
-      <div class="shelf-title">📺 热门剧集连载（国产新剧 / 美剧）</div>
-      <div class="car-card-grid" id="drama-grid"></div>
-    </div>
+      <!-- 栏目 4: 热门连载剧集 -->
+      <div class="shelf-section" id="shelf-drama-wrap">
+        <div class="shelf-title">📺 热门剧集连载（国产新剧 / 美剧）</div>
+        <div class="car-card-grid" id="drama-grid"></div>
+      </div>
 
-    <!-- 栏目 5: 海外精选好剧 -->
-    <div class="shelf-section" id="shelf-anime-wrap">
-      <div class="shelf-title">🎭 海外日韩精选剧集</div>
-      <div class="car-card-grid" id="anime-grid"></div>
+      <!-- 栏目 5: 海外精选好剧 -->
+      <div class="shelf-section" id="shelf-anime-wrap">
+        <div class="shelf-title">🎭 海外日韩精选剧集</div>
+        <div class="car-card-grid" id="anime-grid"></div>
+      </div>
     </div>
   </main>
 
@@ -1808,9 +1836,12 @@
       }
       closeDrawer('drawer-engine');
 
-      // 确保进入播放器视图
+      // 确保进入全屏无遮挡播放器视图
+      const carHeader = document.getElementById('car-header');
+      if (carHeader) carHeader.style.display = 'none';
       document.getElementById('home-view').style.display = 'none';
       document.getElementById('player-view').style.display = 'block';
+      document.body.style.overflow = 'hidden';
 
       initCanvasRenderer();
       initWebAudio();
@@ -1854,8 +1885,11 @@
       currentCid = cid;
       currentEpIndex = epIdx;
 
+      const carHeader = document.getElementById('car-header');
+      if (carHeader) carHeader.style.display = 'none';
       document.getElementById('home-view').style.display = 'none';
       document.getElementById('player-view').style.display = 'block';
+      document.body.style.overflow = 'hidden';
 
       try {
         initCanvasRenderer();
@@ -2031,7 +2065,10 @@
       video.pause();
       if (hlsInstance) { hlsInstance.destroy(); hlsInstance = null; }
       document.getElementById('player-view').style.display = 'none';
+      const carHeader = document.getElementById('car-header');
+      if (carHeader) carHeader.style.display = 'flex';
       document.getElementById('home-view').style.display = 'block';
+      document.body.style.overflow = '';
     }
 
     // ========================================================
@@ -2206,9 +2243,88 @@
       }
     }
 
+    const categoryTitles = {
+      all: '🔥 全部精选',
+      movie: '🎬 4K 臻彩影院 · 电影专区',
+      series: '📺 热门剧集 · 电视剧连载',
+      variety: '🎤 精彩综艺 · 热门连播',
+      anime: '🦊 热门动漫 · 新番精选',
+      short_drama: '📱 极速微短剧 · 爽剧精选',
+      rank: '🏆 车机高分热播总榜 (4K 极速蓝光)'
+    };
+
+    let currentCategoryKind = 'all';
+
+    async function selectCategory(kind, el) {
+      currentCategoryKind = kind;
+      const pills = document.querySelectorAll('#category-bar .quick-tag');
+      pills.forEach(p => p.classList.remove('active'));
+      if (el) el.classList.add('active');
+
+      const secResults = document.getElementById('search-results-section');
+      if (secResults) secResults.style.display = 'none';
+
+      const catSec = document.getElementById('category-results-section');
+      const catGrid = document.getElementById('category-grid');
+      const catTitle = document.getElementById('category-title');
+      const homeShelves = document.getElementById('home-shelves-wrap');
+
+      if (kind === 'all') {
+        if (catSec) catSec.style.display = 'none';
+        if (homeShelves) homeShelves.style.display = 'block';
+        return;
+      }
+
+      if (homeShelves) homeShelves.style.display = 'none';
+      if (catSec) catSec.style.display = 'block';
+      if (catTitle) catTitle.innerHTML = categoryTitles[kind] || '🔍 分类影片';
+      if (catGrid) {
+        catGrid.innerHTML = '<div style="color: var(--accent-cyan); font-size: 18px; padding: 20px;">正在连接片库...</div>';
+      }
+
+      try {
+        let items = [];
+        if (kind === 'rank') {
+          const res = await fetch('/api/rank');
+          const d = await res.json();
+          items = (d.items || []).filter(item => !isJunkOrSport(item));
+        } else {
+          const res = await fetch(`/api/browse?kind=${encodeURIComponent(kind)}&limit=48&sort=heat_desc`);
+          const d = await res.json();
+          items = (d.items || d.cards || []).filter(item => !isJunkOrSport(item));
+        }
+
+        if (!items.length) {
+          if (catGrid) catGrid.innerHTML = '<div style="color: var(--text-muted); padding: 20px;">该分类暂无更多片源</div>';
+          return;
+        }
+
+        if (catGrid) {
+          catGrid.innerHTML = '';
+          items.forEach(item => {
+            catGrid.appendChild(createCarCard(item));
+          });
+        }
+      } catch (err) {
+        console.warn('[Category] load error:', err);
+        if (catGrid) {
+          catGrid.innerHTML = `<div style="color: var(--accent-red); padding: 20px; cursor: pointer;" onclick="selectCategory('${kind}', null)">加载失败，点击重试</div>`;
+        }
+      }
+    }
+
     async function runCarSearch(kw) {
       const q = kw || document.getElementById('car-search-input').value.trim();
       if (!q) return;
+
+      const pills = document.querySelectorAll('#category-bar .quick-tag');
+      pills.forEach(p => p.classList.remove('active'));
+
+      const catSec = document.getElementById('category-results-section');
+      if (catSec) catSec.style.display = 'none';
+
+      const homeShelves = document.getElementById('home-shelves-wrap');
+      if (homeShelves) homeShelves.style.display = 'none';
 
       const sec = document.getElementById('search-results-section');
       const grid = document.getElementById('search-grid');
