@@ -182,17 +182,17 @@ registerProcessor('pcm-ring-buffer-processor', PcmRingBufferProcessor);
 
   function status(text, mode) {
     const el = document.getElementById('stat-decoder');
-    if (el) el.textContent = text;
+    if (el && text) el.textContent = text;
     if (mode) state.mode = mode;
     const badge = document.getElementById('badge-engine');
     if (badge) {
-      badge.textContent = `⚡ ${
-        state.mode === 'wasm'
-          ? 'FFmpeg.wasm 逐帧软解 + AudioWorklet PCM'
-          : state.mode === 'webcodecs'
-          ? 'JS Demux + WebCodecs + AudioWorklet PCM'
-          : 'FFmpeg.wasm 逐帧软解'
-      }`;
+      if (state.mode === 'wasm') {
+        badge.textContent = '⚡ FFmpeg.wasm 逐帧软解 + AudioWorklet PCM';
+      } else if (state.mode === 'webcodecs') {
+        badge.textContent = '⚡ JS Demux + WebCodecs + AudioWorklet PCM';
+      } else {
+        badge.textContent = '⚡ GPU硬解加速 + WebAudio';
+      }
     }
   }
 

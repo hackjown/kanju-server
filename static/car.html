@@ -719,6 +719,9 @@
           <div class="hud-tech-monitor">
             <span>解码: <strong id="stat-decoder">GPU 原生硬解</strong></span>
             <span>帧率: <strong id="stat-fps">60.0 FPS</strong></span>
+            <span id="stat-renderer" style="display:none">GPU VPU</span>
+            <span id="stat-audio" style="display:none">WebAudio</span>
+            <span id="stat-colormode" style="display:none">原色直出</span>
           </div>
           <!-- 顶栏专属全屏快捷按钮：分屏模式下永不被挤压，一触即大！ -->
           <button class="btn-car primary btn-fullscreen" id="btn-top-fullscreen" onclick="toggleFullscreen()" style="padding: 6px 14px; font-size: 13px;" title="进入/退出全屏">⛶ 全屏</button>
@@ -933,7 +936,6 @@
     let lastFpsTs = performance.now();
     let currentFps = 0.0;
     let renderLoopStarted = false;
-    if (window.CarMediaEngine) window.CarMediaEngine.status('等待媒体源', 'idle');
 
     function initCanvasRenderer() {
       try {
@@ -943,12 +945,26 @@
 
       if (gl) {
         isWebGl = true;
-        document.getElementById('stat-renderer').innerText = gl.getParameter(gl.VERSION).includes('2.0') ? 'WebGL 2.0 (GPU)' : 'WebGL 1.0 (GPU)';
-        setupWebGLShaders();
+        const rendEl = document.getElementById('stat-renderer');
+        if (rendEl) {
+          try {
+            rendEl.innerText = gl.getParameter(gl.VERSION).includes('2.0') ? 'WebGL 2.0 (GPU)' : 'WebGL 1.0 (GPU)';
+          } catch (_) {
+            rendEl.innerText = 'WebGL (GPU)';
+          }
+        }
+        try {
+          setupWebGLShaders();
+        } catch (err) {
+          console.warn('[WebGL] Shaders init warning:', err);
+        }
       } else {
         isWebGl = false;
-        ctx2d = canvas.getContext('2d');
-        document.getElementById('stat-renderer').innerText = 'Canvas 2D';
+        try {
+          ctx2d = canvas.getContext('2d');
+        } catch (_) {}
+        const rendEl = document.getElementById('stat-renderer');
+        if (rendEl) rendEl.innerText = 'Canvas 2D';
       }
     }
 
@@ -1192,48 +1208,53 @@
       const AudioContextClass = window.AudioContext || window.webkitAudioContext;
       if (!AudioContextClass) return;
 
-      audioCtx = new AudioContextClass();
-      audioSourceNode = audioCtx.createMediaElementSource(video);
+      try {
+        audioCtx = new AudioContextClass();
+        audioSourceNode = audioCtx.createMediaElementSource(video);
 
-      // 低频陷波/提升 (超重低音)
-      bassFilter = audioCtx.createBiquadFilter();
-      bassFilter.type = 'lowshelf';
-      bassFilter.frequency.value = 90;
-      bassFilter.gain.value = 0;
+        // 低频陷波/提升 (超重低音)
+        bassFilter = audioCtx.createBiquadFilter();
+        bassFilter.type = 'lowshelf';
+        bassFilter.frequency.value = 90;
+        bassFilter.gain.value = 0;
 
-      // 中频人声 (对话清晰)
-      vocalFilter = audioCtx.createBiquadFilter();
-      vocalFilter.type = 'peaking';
-      vocalFilter.frequency.value = 2400;
-      vocalFilter.Q.value = 1.0;
-      vocalFilter.gain.value = 0;
+        // 中频人声 (对话清晰)
+        vocalFilter = audioCtx.createBiquadFilter();
+        vocalFilter.type = 'peaking';
+        vocalFilter.frequency.value = 2400;
+        vocalFilter.Q.value = 1.0;
+        vocalFilter.gain.value = 0;
 
-      // 高频细节
-      trebleFilter = audioCtx.createBiquadFilter();
-      trebleFilter.type = 'highshelf';
-      trebleFilter.frequency.value = 8000;
-      trebleFilter.gain.value = 0;
+        // 高频细节
+        trebleFilter = audioCtx.createBiquadFilter();
+        trebleFilter.type = 'highshelf';
+        trebleFilter.frequency.value = 8000;
+        trebleFilter.gain.value = 0;
 
-      // 主音量增益 (最高可达 200%)
-      masterGain = audioCtx.createGain();
-      masterGain.gain.value = 1.0;
+        // 主音量增益 (最高可达 200%)
+        masterGain = audioCtx.createGain();
+        masterGain.gain.value = 1.0;
 
-      // 实时频谱分析器
-      analyserNode = audioCtx.createAnalyser();
-      analyserNode.fftSize = 64;
+        // 实时频谱分析器
+        analyserNode = audioCtx.createAnalyser();
+        analyserNode.fftSize = 64;
 
-      // 链路串接: Source -> Bass -> Vocal -> Treble -> Gain -> Analyser -> Output
-      audioSourceNode.connect(bassFilter);
-      // 独立 AudioDecoder 的 PCM 也进入同一套车载 DSP 链，避免重复创建音效图。
-      if (window.CarMediaEngine) window.CarMediaEngine.connectAudioContext(audioCtx, bassFilter);
-      bassFilter.connect(vocalFilter);
-      vocalFilter.connect(trebleFilter);
-      trebleFilter.connect(masterGain);
-      masterGain.connect(analyserNode);
-      analyserNode.connect(audioCtx.destination);
+        // 链路串接: Source -> Bass -> Vocal -> Treble -> Gain -> Analyser -> Output
+        audioSourceNode.connect(bassFilter);
+        // 独立 AudioDecoder 的 PCM 也进入同一套车载 DSP 链，避免重复创建音效图。
+        if (window.CarMediaEngine) window.CarMediaEngine.connectAudioContext(audioCtx, bassFilter);
+        bassFilter.connect(vocalFilter);
+        vocalFilter.connect(trebleFilter);
+        trebleFilter.connect(masterGain);
+        masterGain.connect(analyserNode);
+        analyserNode.connect(audioCtx.destination);
 
-      document.getElementById('stat-audio').innerText = `WebAudio ${audioCtx.sampleRate/1000}kHz (PCM/DSP)`;
-      renderSpectrumLoop();
+        const statAudio = document.getElementById('stat-audio');
+        if (statAudio) statAudio.innerText = `WebAudio ${audioCtx.sampleRate/1000}kHz (PCM/DSP)`;
+        renderSpectrumLoop();
+      } catch (err) {
+        console.warn('[WebAudio] init failed, falling back to direct video audio:', err);
+      }
 
       ['click', 'touchstart', 'pointerdown'].forEach(evt => {
         document.addEventListener(evt, () => {
@@ -1836,40 +1857,59 @@
       document.getElementById('home-view').style.display = 'none';
       document.getElementById('player-view').style.display = 'block';
 
-      initCanvasRenderer();
-      initWebAudio();
-      if (audioCtx && audioCtx.state === 'suspended') {
-        audioCtx.resume().catch(() => {});
+      try {
+        initCanvasRenderer();
+      } catch (e) {
+        console.warn('initCanvasRenderer failed in play:', e);
       }
-      initWakeLock();
-      renderFrameLoop();
+      try {
+        initWebAudio();
+        if (audioCtx && audioCtx.state === 'suspended') {
+          audioCtx.resume().catch(() => {});
+        }
+      } catch (e) {
+        console.warn('initWebAudio failed in play:', e);
+      }
+      try {
+        initWakeLock();
+      } catch (_) {}
+      try {
+        renderFrameLoop();
+      } catch (_) {}
 
       try {
         const res = await fetch('/api/detail/' + encodeURIComponent(cid));
         const d = await res.json();
-        if (!d.ok) return alert('加载影片详情失败');
+        if (!d.ok) {
+          showGestureHud('❌', '加载影片详情失败', 1.5);
+          return;
+        }
 
         currentDetail = d;
-        document.getElementById('disp-movie-title').innerText = d.title || '未知影片';
+        const titleEl = document.getElementById('disp-movie-title');
+        if (titleEl) titleEl.innerText = d.title || '未知影片';
 
         // 渲染选集抽屉
         const eps = d.episodes || [];
         const epsBody = document.getElementById('drawer-eps-body');
-        epsBody.innerHTML = '';
-        eps.forEach((ep, idx) => {
-          const btn = document.createElement('button');
-          btn.className = 'btn-car' + (idx === epIdx ? ' selected' : '');
-          btn.innerText = ep.title || `第 ${idx + 1} 集`;
-          btn.onclick = () => {
-            closeDrawer('drawer-eps');
-            loadEpisode(idx);
-          };
-          epsBody.appendChild(btn);
-        });
+        if (epsBody) {
+          epsBody.innerHTML = '';
+          eps.forEach((ep, idx) => {
+            const btn = document.createElement('button');
+            btn.className = 'btn-car' + (idx === epIdx ? ' selected' : '');
+            btn.innerText = ep.title || `第 ${idx + 1} 集`;
+            btn.onclick = () => {
+              closeDrawer('drawer-eps');
+              loadEpisode(idx);
+            };
+            epsBody.appendChild(btn);
+          });
+        }
 
         loadEpisode(epIdx);
       } catch (e) {
         console.error('加载影视失败:', e);
+        showGestureHud('❌', '网络异常，加载失败', 1.5);
       }
     }
 
@@ -1969,7 +2009,7 @@
 
       let playUrl = line.url;
       // 检查是否需要代理
-      if (playUrl && playUrl.startsWith('http') && !playUrl.includes('127.0.0.1') && !playUrl.includes(location.host)) {
+      if (playUrl && playUrl.startsWith('http') && !playUrl.includes('127.0.0.1') && !playUrl.includes(location.host) && !playUrl.includes('/proxy?')) {
         playUrl = '/proxy?u=' + encodeURIComponent(playUrl);
       }
       playMediaSource(playUrl);
@@ -2054,7 +2094,10 @@
         this.src = fallbackSrc;
       };
 
-      card.onclick = () => loadMovieAndPlay(item.id);
+      const itemId = item.id || item.catalog_id;
+      card.onclick = () => {
+        if (itemId) loadMovieAndPlay(itemId);
+      };
       return card;
     }
 
@@ -2070,9 +2113,13 @@
           const popGrid = document.getElementById('home-popular-grid');
           if (popGrid) {
             popGrid.innerHTML = '';
-            (sections[0].cards || []).slice(0, 18).forEach(item => {
+            const cards = sections[0].cards || [];
+            cards.slice(0, 18).forEach(item => {
               if (!isJunkOrSport(item)) popGrid.appendChild(createCarCard(item));
             });
+            if (popGrid.children.length === 0 && cards.length > 0) {
+              cards.slice(0, 18).forEach(item => popGrid.appendChild(createCarCard(item)));
+            }
           }
         }
 
@@ -2089,6 +2136,9 @@
           movieCards.slice(0, 24).forEach(item => {
             if (!isJunkOrSport(item)) movieGrid.appendChild(createCarCard(item));
           });
+          if (movieGrid.children.length === 0) {
+            movieCards.slice(0, 24).forEach(item => movieGrid.appendChild(createCarCard(item)));
+          }
         }
 
         // 栏目 4: 热门剧集连载 (国产新剧 / 美剧)
@@ -2104,6 +2154,9 @@
           dramaCards.slice(0, 24).forEach(item => {
             if (!isJunkOrSport(item)) dramaGrid.appendChild(createCarCard(item));
           });
+          if (dramaGrid.children.length === 0) {
+            dramaCards.slice(0, 24).forEach(item => dramaGrid.appendChild(createCarCard(item)));
+          }
         }
 
         // 栏目 5: 海外日韩精选剧集
@@ -2119,9 +2172,16 @@
           animeCards.slice(0, 24).forEach(item => {
             if (!isJunkOrSport(item)) animeGrid.appendChild(createCarCard(item));
           });
+          if (animeGrid.children.length === 0) {
+            animeCards.slice(0, 24).forEach(item => animeGrid.appendChild(createCarCard(item)));
+          }
         }
       } catch (e) {
         console.warn('[Car] loadHome sections failed:', e);
+        const popGrid = document.getElementById('home-popular-grid');
+        if (popGrid && popGrid.innerText.includes('正在连接')) {
+          popGrid.innerHTML = '<div style="color: var(--text-muted); padding: 20px; cursor: pointer;" onclick="loadHomeContent()">片库连接缓慢，点击重新加载</div>';
+        }
       }
 
       // 2. 加载排行榜 /api/rank，严格过滤掉无海报的比赛录像与全黑卡片
@@ -2132,12 +2192,17 @@
         if (hotGrid && rankData.items && rankData.items.length) {
           hotGrid.innerHTML = '';
           const validRankItems = rankData.items.filter(item => !isJunkOrSport(item));
-          validRankItems.slice(0, 24).forEach(item => {
+          const itemsToRender = validRankItems.length > 0 ? validRankItems : rankData.items;
+          itemsToRender.slice(0, 24).forEach(item => {
             hotGrid.appendChild(createCarCard(item));
           });
         }
       } catch (e) {
         console.warn('[Car] loadRank failed:', e);
+        const hotGrid = document.getElementById('hot-grid');
+        if (hotGrid && hotGrid.innerText.includes('正在载入')) {
+          hotGrid.innerHTML = '<div style="color: var(--text-muted); padding: 20px; cursor: pointer;" onclick="loadHomeContent()">榜单连接缓慢，点击重新加载</div>';
+        }
       }
     }
 
@@ -2174,16 +2239,46 @@
       runCarSearch(kw);
     }
 
+    // 播放器状态与时间双向绑定
+    video.addEventListener('play', () => {
+      const btn = document.getElementById('btn-play-toggle');
+      if (btn) {
+        btn.innerText = '⏸ 暂停';
+        btn.classList.add('primary');
+      }
+    });
+    video.addEventListener('pause', () => {
+      const btn = document.getElementById('btn-play-toggle');
+      if (btn) {
+        btn.innerText = '▶ 播放';
+        btn.classList.remove('primary');
+      }
+    });
+    video.addEventListener('timeupdate', updateProgress);
+    video.addEventListener('loadedmetadata', updateProgress);
+
     // 页面启动检查 URL 参数
     window.addEventListener('DOMContentLoaded', () => {
-      initCanvasRenderer();
-      loadHomeContent();
+      try {
+        initCanvasRenderer();
+      } catch (e) {
+        console.warn('initCanvasRenderer failed:', e);
+      }
+      try {
+        loadHomeContent();
+      } catch (e) {
+        console.warn('loadHomeContent failed:', e);
+      }
 
       // 支持以 ?cid=xxx 或 ?id=xxx 直接点开播放
-      const urlParams = new URLSearchParams(window.location.search);
-      const cid = urlParams.get('cid') || urlParams.get('id');
-      if (cid) {
-        loadMovieAndPlay(cid);
+      try {
+        const urlParams = new URLSearchParams(window.location.search);
+        const cid = urlParams.get('cid') || urlParams.get('id');
+        if (cid) {
+          loadMovieAndPlay(cid);
+        }
+      } catch (e) {
+        console.warn('auto-play param failed:', e);
       }
     });
   </script>
