@@ -4,7 +4,7 @@
   <meta charset="utf-8"/>
   <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover"/>
   <meta name="referrer" content="no-referrer"/>
-  <title>看剧AI · 极速车机版 (Canvas + WebAudio)</title>
+  <title>剧场8 · 极速车机版 (Canvas + WebAudio)</title>
   <script src="/static/hls.min.js"></script>
   <script src="/static/car-media-engine.js"></script>
   <style>
@@ -803,7 +803,7 @@
         <button class="btn-car" onclick="closeDrawer('drawer-engine')">关闭</button>
       </div>
       <div style="font-size: 15px; color: var(--text-muted); margin-bottom: 14px; line-height: 1.6;">
-        看剧AI 采用全新独立媒体管线：<strong>WebCodecs 硬件解复用</strong>、<strong>FFmpeg.wasm 逐帧软解 (RGBA ➔ WebGL)</strong> 与 <strong>AudioWorklet 环形缓冲</strong>。
+        剧场8 采用全新独立媒体管线：<strong>WebCodecs 硬件解复用</strong>、<strong>FFmpeg.wasm 逐帧软解 (RGBA ➔ WebGL)</strong> 与 <strong>AudioWorklet 环形缓冲</strong>。
       </div>
 
       <div style="background: rgba(15,23,42,0.85); border: 1px solid var(--border-dark); border-radius: 14px; padding: 18px; margin-bottom: 16px;">
@@ -1799,7 +1799,7 @@
           btn.style.width = '100%';
           btn.style.justifyContent = 'space-between';
 
-          const isKanju4K = l.is_4k && l.source_type === 'kanju';
+          const isKanju4K = l.is_4k && (l.source_type === 'juchang8' || l.source_type === 'kanju');
           const isColl4K = l.is_4k && l.source_type === 'collector';
           let tagColor = 'var(--text-muted)';
           let tagText = '1080P 高清';
@@ -1887,7 +1887,7 @@
     }
 
     function createSvgFallback(title) {
-      const safeTitle = (title || '看剧AI').slice(0, 8);
+      const safeTitle = (title || '剧场8').slice(0, 8);
       return 'data:image/svg+xml;utf8,' + encodeURIComponent(`
         <svg xmlns="http://www.w3.org/2000/svg" width="300" height="450" viewBox="0 0 300 450">
           <defs>

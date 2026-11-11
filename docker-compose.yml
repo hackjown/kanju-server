@@ -1,15 +1,17 @@
 version: '3.8'
 
 services:
-  kanju:
+  juchang8:
     build: .
-    container_name: kanju_app
+    container_name: juchang8_app
     restart: always
     ports:
       - "8077:8077"
     volumes:
       # 持久化挂载：保护已绑定的 115/夸克 Cookie、点115配置与片单索引
+      - ./juchang8.db:/app/juchang8.db
       - ./kanju.db:/app/kanju.db
+      - ./juchang8_upstream.json:/app/juchang8_upstream.json
       - ./kanju_upstream.json:/app/kanju_upstream.json
       - ./cache:/app/cache
       - ./static:/app/static

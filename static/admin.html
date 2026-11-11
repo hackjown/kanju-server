@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>看剧AI · 后台管理系统</title>
+  <title>剧场8 - 后台管理系统 (juchang8.com)</title>
   <style>
     :root {
       --bg: #090a0f;
@@ -131,6 +131,25 @@
     .tag-user { background: rgba(56,189,248,0.15); color: var(--cyan); border: 1px solid rgba(56,189,248,0.3); }
     .tag-active { background: rgba(16,185,129,0.15); color: var(--green); }
     .tag-banned { background: rgba(239,68,68,0.15); color: var(--red); }
+    .tag-purple { background: rgba(168,85,247,0.15); color: #c084fc; border: 1px solid rgba(168,85,247,0.3); }
+    .tag-amber { background: rgba(245,158,11,0.15); color: #fbbf24; border: 1px solid rgba(245,158,11,0.3); }
+    .tag-gray { background: rgba(148,163,184,0.15); color: #94a3b8; }
+
+    /* 开关 Toggle Switch */
+    .switch {
+      position: relative; display: inline-block; width: 38px; height: 20px; vertical-align: middle;
+    }
+    .switch input { opacity: 0; width: 0; height: 0; }
+    .slider {
+      position: absolute; cursor: pointer; top: 0; left: 0; right: 0; bottom: 0;
+      background-color: #242c42; transition: .25s; border-radius: 20px; border: 1px solid var(--border);
+    }
+    .slider:before {
+      position: absolute; content: ""; height: 14px; width: 14px; left: 2px; bottom: 2px;
+      background-color: #94a3b8; transition: .25s; border-radius: 50%;
+    }
+    input:checked + .slider { background-color: var(--primary); border-color: var(--primary); }
+    input:checked + .slider:before { transform: translateX(18px); background-color: #000; }
 
     /* 弹窗 Modal */
     .modal-backdrop {
@@ -163,8 +182,8 @@
   <!-- 登录蒙层 -->
   <div id="login-view" style="display: none;">
     <div class="login-box">
-      <div class="login-title">看剧AI · 后台管理系统</div>
-      <div class="login-subtitle">请使用管理员账号登录控制台</div>
+      <div class="login-title">剧场8 · 后台管理系统</div>
+      <div class="login-subtitle">请使用管理员账号登录控制台 (juchang8.com)</div>
       <div id="login-error" style="color: var(--red); font-size: 13px; margin-bottom: 14px; text-align: center; display: none;"></div>
       <form id="admin-login-form" onsubmit="handleAdminLogin(event)">
         <div class="form-group">
@@ -186,21 +205,25 @@
   <!-- 主布局 -->
   <aside id="sidebar">
     <div class="sidebar-brand">
-      <span>🎬 看剧AI</span>
-      <span class="badge">Master</span>
+      <span>🎬 剧场8</span>
+      <span class="badge">juchang8.com</span>
     </div>
     <ul class="nav-list">
       <li class="nav-item"><a class="nav-link active" onclick="switchTab('overview')">📊 控制台总览</a></li>
       <li class="nav-item"><a class="nav-link" onclick="switchTab('users')">👥 用户账号管理</a></li>
       <li class="nav-item"><a class="nav-link" onclick="switchTab('content')">💬 片单与评论管理</a></li>
-      <li class="nav-item"><a class="nav-link" onclick="switchTab('invites')">🎫 邀请码与公告</a></li>
+      <li class="nav-item"><a class="nav-link" onclick="switchTab('announcements')">📢 全站公告管理</a></li>
+      <li class="nav-item"><a class="nav-link" onclick="switchTab('sidebar')">📑 侧边栏与主导航</a></li>
+      <li class="nav-item"><a class="nav-link" onclick="switchTab('settings')">⚙️ 站点全局配置</a></li>
+      <li class="nav-item"><a class="nav-link" onclick="switchTab('feedback')">📮 用户反馈工单</a></li>
+      <li class="nav-item"><a class="nav-link" onclick="switchTab('invites')">🎫 邀请码管理</a></li>
       <li class="nav-item"><a class="nav-link" onclick="switchTab('collector')">📡 采集源与 4K 管理</a></li>
       <li class="nav-item"><a class="nav-link" onclick="switchTab('pan')">☁️ 网盘解析与扫码登录</a></li>
       <li class="nav-item"><a class="nav-link" onclick="switchTab('maintenance')">⚡ 上游与系统运维</a></li>
     </ul>
     <div class="sidebar-footer">
-      <div>看剧AI 商业复刻控制台</div>
-      <div style="font-size: 11px; margin-top: 4px; color: #64748b;">Version 4.2 Pro</div>
+      <div>剧场8 (juchang8.com) 智能控制台</div>
+      <div style="font-size: 11px; margin-top: 4px; color: #64748b;">Version 5.0 Pro · 全站管理</div>
     </div>
   </aside>
 
@@ -252,7 +275,7 @@
           <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 16px;">
             <div style="background: rgba(0,0,0,0.2); padding: 14px; border-radius: 8px; border: 1px solid var(--border);">
               <div style="font-size: 12px; color: var(--text-muted);">当前绑定上游 Base</div>
-              <div style="font-size: 15px; font-weight: 700; color: #fff; margin-top: 4px;" id="sys-upstream-base">https://kanju26.com</div>
+              <div style="font-size: 15px; font-weight: 700; color: #fff; margin-top: 4px;" id="sys-upstream-base">https://juchang8.com</div>
             </div>
             <div style="background: rgba(0,0,0,0.2); padding: 14px; border-radius: 8px; border: 1px solid var(--border);">
               <div style="font-size: 12px; color: var(--text-muted);">4K 线路解析通道</div>
@@ -357,36 +380,246 @@
         </div>
       </section>
 
-      <!-- Tab 4: 邀请码与全站公告 -->
+      <!-- Tab: 全站公告管理 -->
+      <section id="tab-announcements" class="tab-pane">
+        <div class="panel">
+          <div class="panel-header">
+            <div>
+              <div class="panel-title">📢 全站公告与弹窗提醒管理</div>
+              <div style="font-size: 12px; color: var(--text-muted); margin-top: 4px;">
+                动态管理前台展示的公告内容，支持弹窗强提醒、全站顶部横幅、侧边栏公告卡片及滚动跑马灯。
+              </div>
+            </div>
+            <button onclick="openAddAnnouncementModal()" class="btn btn-primary btn-sm">➕ 新增公告</button>
+          </div>
+
+          <div class="table-container">
+            <table>
+              <thead>
+                <tr>
+                  <th style="width: 50px;">ID</th>
+                  <th style="width: 180px;">公告标题</th>
+                  <th style="width: 100px;">展示位置</th>
+                  <th>公告内容摘要</th>
+                  <th style="width: 160px;">跳转链接</th>
+                  <th style="width: 60px;">排序</th>
+                  <th style="width: 70px;">状态</th>
+                  <th style="width: 140px;">发布时间</th>
+                  <th style="width: 120px; text-align: right;">操作</th>
+                </tr>
+              </thead>
+              <tbody id="announcements-table-body">
+                <tr><td colspan="9" style="text-align: center; color: var(--text-muted); padding: 30px;">正在加载公告列表...</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <!-- Tab: 侧边栏与主导航管理 -->
+      <section id="tab-sidebar" class="tab-pane">
+        <div class="panel">
+          <div class="panel-header">
+            <div>
+              <div class="panel-title">📑 侧边栏与主导航项目管理</div>
+              <div style="font-size: 12px; color: var(--text-muted); margin-top: 4px;">
+                动态管理前台顶部主导航栏、左侧抽屉栏模块和底部友情链接，即改即生效无需重启服务。
+              </div>
+            </div>
+            <div style="display: flex; gap: 8px;">
+              <select id="sidebar-filter-section" class="form-input" style="width: 140px; height: 32px; padding: 4px 8px; font-size: 12px;" onchange="filterSidebarItems()">
+                <option value="all">全部区域</option>
+                <option value="nav">顶部主导航 (nav)</option>
+                <option value="widget">侧栏卡片组件 (widget)</option>
+                <option value="link">底部友情链接 (link)</option>
+              </select>
+              <button onclick="openAddSidebarModal()" class="btn btn-primary btn-sm">➕ 新增导航项</button>
+            </div>
+          </div>
+
+          <div class="table-container">
+            <table>
+              <thead>
+                <tr>
+                  <th style="width: 50px;">ID</th>
+                  <th style="width: 150px;">名称 / 图标</th>
+                  <th>路由路径 / 跳转链接</th>
+                  <th style="width: 90px;">归属区域</th>
+                  <th style="width: 70px;">角标</th>
+                  <th style="width: 80px;">权限要求</th>
+                  <th style="width: 60px;">外链</th>
+                  <th style="width: 60px;">排序</th>
+                  <th style="width: 70px;">状态</th>
+                  <th style="width: 120px; text-align: right;">操作</th>
+                </tr>
+              </thead>
+              <tbody id="sidebar-table-body">
+                <tr><td colspan="10" style="text-align: center; color: var(--text-muted); padding: 30px;">正在加载导航项目...</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <!-- Tab: 站点全局配置 -->
+      <section id="tab-settings" class="tab-pane">
+        <form onsubmit="saveSiteSettings(event)">
+          <div class="panel">
+            <div class="panel-header">
+              <div class="panel-title">🌐 域名与访问设置 (juchang8.com)</div>
+            </div>
+            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px;">
+              <div class="form-group">
+                <label class="form-label">站点主域名</label>
+                <input type="text" id="setting-site_domain" class="form-input" placeholder="juchang8.com" required>
+              </div>
+              <div class="form-group">
+                <label class="form-label">官方永久发布页 / 备用域名 (逗号分隔)</label>
+                <input type="text" id="setting-permanent_domains" class="form-input" placeholder="juchang8.com, juchang8.cc">
+              </div>
+            </div>
+            <div class="form-group">
+              <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px;">
+                <label class="form-label" style="margin-bottom: 0;">前台顶部防失联域名提醒条</label>
+                <label class="switch">
+                  <input type="checkbox" id="setting-domain_banner_enabled">
+                  <span class="slider"></span>
+                </label>
+              </div>
+              <input type="text" id="setting-domain_banner_text" class="form-input" placeholder="📢 剧场8 官方永久域名：juchang8.com，请按 Ctrl+D 收藏加入书签防失联！">
+            </div>
+          </div>
+
+          <div class="panel">
+            <div class="panel-header">
+              <div class="panel-title">🏷️ 站点名称与 SEO 优化</div>
+            </div>
+            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px;">
+              <div class="form-group">
+                <label class="form-label">站点主名称</label>
+                <input type="text" id="setting-site_name" class="form-input" placeholder="剧场8" required>
+              </div>
+              <div class="form-group">
+                <label class="form-label">副标题 / Slogan</label>
+                <input type="text" id="setting-site_subtitle" class="form-input" placeholder="AI 智能影音视听殿堂 · 蓝光4K专线">
+              </div>
+            </div>
+            <div class="form-group">
+              <label class="form-label">SEO 标题 (Title)</label>
+              <input type="text" id="setting-seo_title" class="form-input" placeholder="剧场8 - JUCHANG8.COM - 高清电影电视剧在线观看">
+            </div>
+            <div class="form-group">
+              <label class="form-label">SEO 关键词 (Keywords，以英文逗号分隔)</label>
+              <input type="text" id="setting-seo_keywords" class="form-input" placeholder="剧场8, juchang8, juchang8.com, 电影, 电视剧, 动漫, 4K高清">
+            </div>
+            <div class="form-group">
+              <label class="form-label">SEO 站点描述 (Description)</label>
+              <textarea id="setting-seo_description" class="form-input" style="height: 60px; padding: 10px;" placeholder="剧场8 (juchang8.com) 为您提供全网海量高清影视资源与 4K 极速播放体验..."></textarea>
+            </div>
+          </div>
+
+          <div class="panel">
+            <div class="panel-header">
+              <div class="panel-title">👥 用户注册与词元策略</div>
+            </div>
+            <div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 16px;">
+              <div class="form-group">
+                <label class="form-label">开放新用户注册</label>
+                <select id="setting-registration_enabled" class="form-input">
+                  <option value="1">开启 (允许自主注册)</option>
+                  <option value="0">关闭 (仅邀请码/管理员创建)</option>
+                </select>
+              </div>
+              <div class="form-group">
+                <label class="form-label">新用户初始赠送词元</label>
+                <input type="number" id="setting-default_tokens" class="form-input" value="100">
+              </div>
+              <div class="form-group">
+                <label class="form-label">站长联系邮箱 / 客服</label>
+                <input type="text" id="setting-contact_email" class="form-input" placeholder="admin@juchang8.com">
+              </div>
+            </div>
+          </div>
+
+          <div class="panel">
+            <div class="panel-header">
+              <div class="panel-title">📄 页脚与统计脚本 (HTML)</div>
+            </div>
+            <div class="form-group">
+              <label class="form-label">ICP备案号 / 底部版权文本</label>
+              <input type="text" id="setting-icp_beian" class="form-input" placeholder="京ICP备20268888号-1 · © 2026 juchang8.com All Rights Reserved">
+            </div>
+            <div class="form-group">
+              <label class="form-label">自定义页脚 HTML / 统计脚本</label>
+              <textarea id="setting-footer_html" class="form-input" style="height: 80px; padding: 10px; font-family: monospace; font-size: 12px;" placeholder="<script>/* 百度统计 / Google Analytics 等脚本 */</script>"></textarea>
+            </div>
+            <button type="submit" class="btn btn-primary" style="padding: 0 24px;">💾 保存站点全局设置</button>
+          </div>
+        </form>
+      </section>
+
+      <!-- Tab: 用户反馈工单 -->
+      <section id="tab-feedback" class="tab-pane">
+        <div class="panel">
+          <div class="panel-header">
+            <div>
+              <div class="panel-title">📮 用户反馈与留言工单</div>
+              <div style="font-size: 12px; color: var(--text-muted); margin-top: 4px;">
+                查看并处理前台用户提交的播放故障反馈、求片留言与功能建议。
+              </div>
+            </div>
+            <div style="display: flex; gap: 8px;">
+              <select id="feedback-filter-status" class="form-input" style="width: 120px; height: 32px; padding: 4px 8px; font-size: 12px;" onchange="filterFeedbackItems()">
+                <option value="all">全部状态</option>
+                <option value="pending">⏳ 待处理</option>
+                <option value="processing">🔄 处理中</option>
+                <option value="resolved">✅ 已解决</option>
+                <option value="closed">🔒 已关闭</option>
+              </select>
+              <button onclick="loadFeedbackAdmin()" class="btn btn-secondary btn-sm">🔄 刷新工单</button>
+            </div>
+          </div>
+
+          <div class="table-container">
+            <table>
+              <thead>
+                <tr>
+                  <th style="width: 50px;">ID</th>
+                  <th style="width: 110px;">用户账号</th>
+                  <th style="width: 100px;">类型</th>
+                  <th>反馈详情</th>
+                  <th style="width: 140px;">联系方式</th>
+                  <th style="width: 130px;">IP / 提交时间</th>
+                  <th style="width: 120px;">状态</th>
+                  <th style="width: 110px; text-align: right;">操作</th>
+                </tr>
+              </thead>
+              <tbody id="feedback-table-body">
+                <tr><td colspan="8" style="text-align: center; color: var(--text-muted); padding: 30px;">正在加载用户反馈工单...</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <!-- Tab 4: 邀请码管理 -->
       <section id="tab-invites" class="tab-pane">
         <div class="panel">
           <div class="panel-header">
-            <div class="panel-title">🎫 系统邀请码管理</div>
+            <div>
+              <div class="panel-title">🎫 系统邀请码管理</div>
+              <div style="font-size: 12px; color: var(--text-muted); margin-top: 4px;">
+                管理开放注册时限制或免除权限的邀请码，可一键添加新码或作废历史邀请码。
+              </div>
+            </div>
           </div>
           <div style="display: flex; gap: 10px; margin-bottom: 18px;">
-            <input type="text" id="new-invite-input" class="form-input" placeholder="输入新邀请码 (如 VIP999)..." style="max-width: 260px; text-transform: uppercase;">
+            <input type="text" id="new-invite-input" class="form-input" placeholder="输入新邀请码 (如 JUCHANG888)..." style="max-width: 260px; text-transform: uppercase;">
             <button onclick="addInviteCode()" class="btn btn-primary btn-sm">➕ 添加邀请码</button>
           </div>
           <div id="invite-tags-container" style="display: flex; flex-wrap: wrap; gap: 8px;">
             <!-- 动态注入 -->
           </div>
-        </div>
-
-        <div class="panel">
-          <div class="panel-header">
-            <div class="panel-title">📢 全站弹窗公告发布</div>
-          </div>
-          <form onsubmit="saveAnnouncement(event)">
-            <div class="form-group">
-              <label class="form-label">公告标题</label>
-              <input type="text" id="announce-title" class="form-input" required value="看剧AI 永久域名与使用提醒">
-            </div>
-            <div class="form-group">
-              <label class="form-label">公告内容</label>
-              <textarea id="announce-body" class="form-input" style="height: 100px; padding: 10px;" required>欢迎体验看剧AI！全站支持海量影视智能搜索与 4K 高清播放，午夜剧场已对会员开放，更多功能请在左侧菜单探索。</textarea>
-            </div>
-            <button type="submit" class="btn btn-primary btn-sm">📢 立即发布/更新全站公告</button>
-          </form>
         </div>
       </section>
 
@@ -655,7 +888,7 @@
             </div>
           </div>
           <p style="font-size: 12px; color: var(--text-muted); line-height: 1.6;">
-            💡 <strong>自动防爆机制</strong>：用户点击电影时，系统自动将网盘资源秒传到专属目录 <code>/__KanjuTemp__/</code> 进行 4K 取流；
+            💡 <strong>自动防爆机制</strong>：用户点击电影时，系统自动将网盘资源秒传到专属目录 <code>/__Juchang8Temp__/</code> 进行 4K 取流；
             后台守护线程每 2 小时自动巡检，发现转存超过 24 小时会自动从网盘物理删除并<strong>彻底清空回收站</strong>，保证网盘空间始终干净充裕。
           </p>
         </div>
@@ -710,6 +943,121 @@
       </section>
     </div>
   </main>
+
+  <!-- 模态框：添加/编辑公告 -->
+  <div id="modal-announcement" class="modal-backdrop">
+    <div class="modal-card">
+      <div class="modal-header">
+        <div id="modal-announcement-title" class="modal-title">📢 新增全站公告</div>
+        <button class="modal-close" onclick="closeModal('modal-announcement')">&times;</button>
+      </div>
+      <input type="hidden" id="modal-announce-id" value="">
+      <div class="form-group">
+        <label class="form-label">公告标题</label>
+        <input type="text" id="modal-announce-title" class="form-input" placeholder="例如：剧场8 官方永久域名公布" required>
+      </div>
+      <div class="form-group">
+        <label class="form-label">展示类型</label>
+        <select id="modal-announce-type" class="form-input">
+          <option value="modal">全站弹窗提醒 (首次访问强提醒)</option>
+          <option value="banner">顶部固定横幅 (全站置顶公告条)</option>
+          <option value="sidebar">侧边栏通知卡片 (抽屉内展示)</option>
+          <option value="marquee">滚动跑马灯公告</option>
+        </select>
+      </div>
+      <div class="form-group">
+        <label class="form-label">公告正文内容 (支持纯文本或简易HTML)</label>
+        <textarea id="modal-announce-content" class="form-input" style="height: 110px; padding: 10px;" placeholder="请输入公告详细内容..." required></textarea>
+      </div>
+      <div class="form-group">
+        <label class="form-label">点击跳转链接 (可选)</label>
+        <input type="text" id="modal-announce-url" class="form-input" placeholder="例如：https://juchang8.com/vip 或留空">
+      </div>
+      <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px;">
+        <div class="form-group">
+          <label class="form-label">排序权重 (越大越靠前)</label>
+          <input type="number" id="modal-announce-sort" class="form-input" value="100">
+        </div>
+        <div class="form-group" style="display: flex; flex-direction: column; justify-content: flex-end;">
+          <label style="display: flex; align-items: center; gap: 8px; cursor: pointer; height: 40px; margin-bottom: 0;">
+            <input type="checkbox" id="modal-announce-active" checked style="width: 16px; height: 16px; accent-color: var(--primary);">
+            <span style="font-size: 13px; font-weight: 600;">立即启用该公告</span>
+          </label>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-secondary" onclick="closeModal('modal-announcement')">取消</button>
+        <button class="btn btn-primary" onclick="submitAnnouncement()">保存并发布</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 模态框：添加/编辑侧边栏/导航项 -->
+  <div id="modal-sidebar" class="modal-backdrop">
+    <div class="modal-card">
+      <div class="modal-header">
+        <div id="modal-sidebar-title" class="modal-title">📑 新增导航/侧栏项</div>
+        <button class="modal-close" onclick="closeModal('modal-sidebar')">&times;</button>
+      </div>
+      <input type="hidden" id="modal-sidebar-id" value="">
+      <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px;">
+        <div class="form-group">
+          <label class="form-label">名称 / 标题</label>
+          <input type="text" id="modal-sidebar-name" class="form-input" placeholder="例如：4K 专区" required>
+        </div>
+        <div class="form-group">
+          <label class="form-label">图标 (Emoji 或字符)</label>
+          <input type="text" id="modal-sidebar-icon" class="form-input" placeholder="例如：💎 / 🎬 / 🚀" value="🎬">
+        </div>
+      </div>
+      <div class="form-group">
+        <label class="form-label">路由路径 / 外部链接</label>
+        <input type="text" id="modal-sidebar-path" class="form-input" placeholder="例如：/playlists 或 https://..." required>
+      </div>
+      <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px;">
+        <div class="form-group">
+          <label class="form-label">归属区域</label>
+          <select id="modal-sidebar-section" class="form-input">
+            <option value="nav">顶部主导航 (nav)</option>
+            <option value="widget">侧栏卡片组件 (widget)</option>
+            <option value="link">底部友情链接 (link)</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label class="form-label">角标文本 (Badge)</label>
+          <input type="text" id="modal-sidebar-badge" class="form-input" placeholder="例如：HOT / 4K / VIP">
+        </div>
+      </div>
+      <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px;">
+        <div class="form-group">
+          <label class="form-label">访问权限</label>
+          <select id="modal-sidebar-role" class="form-input">
+            <option value="all">全员可见 (无需登录)</option>
+            <option value="member">登录会员 (仅会员可见)</option>
+            <option value="admin">仅管理员可见</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label class="form-label">排序权重 (越大越靠前)</label>
+          <input type="number" id="modal-sidebar-sort" class="form-input" value="100">
+        </div>
+      </div>
+      <div style="display: flex; gap: 20px; margin-top: 4px;">
+        <label style="display: flex; align-items: center; gap: 8px; cursor: pointer;">
+          <input type="checkbox" id="modal-sidebar-external" style="width: 16px; height: 16px; accent-color: var(--primary);">
+          <span style="font-size: 13px;">在新窗口打开 (外链)</span>
+        </label>
+        <label style="display: flex; align-items: center; gap: 8px; cursor: pointer;">
+          <input type="checkbox" id="modal-sidebar-active" checked style="width: 16px; height: 16px; accent-color: var(--primary);">
+          <span style="font-size: 13px; font-weight: 600;">立即启用显示</span>
+        </label>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-secondary" onclick="closeModal('modal-sidebar')">取消</button>
+        <button class="btn btn-primary" onclick="submitSidebarItem()">确认保存</button>
+      </div>
+    </div>
+  </div>
 
   <!-- 模态框：调整词元 -->
   <div id="modal-tokens" class="modal-backdrop">
@@ -908,6 +1256,16 @@
       setTimeout(() => { t.remove(); }, 3000);
     }
 
+    function escapeHtml(str) {
+      if (!str) return '';
+      return String(str)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#039;');
+    }
+
     // Tab 切换
     function switchTab(name) {
       document.querySelectorAll('.tab-pane').forEach(el => el.classList.remove('active'));
@@ -921,7 +1279,11 @@
         overview: '📊 控制台总览',
         users: '👥 用户账号管理',
         content: '💬 片单与评论管理',
-        invites: '🎫 邀请码与公告',
+        announcements: '📢 全站公告管理',
+        sidebar: '📑 侧边栏与主导航',
+        settings: '⚙️ 站点全局配置',
+        feedback: '📮 用户反馈工单',
+        invites: '🎫 邀请码管理',
         collector: '📡 采集源与 4K 管理',
         pan: '☁️ 网盘解析与扫码登录',
         maintenance: '⚡ 上游与系统运维'
@@ -931,6 +1293,10 @@
       if (name === 'overview') loadOverviewData();
       if (name === 'users') loadUsers();
       if (name === 'content') { loadComments(); loadPlaylists(); }
+      if (name === 'announcements') loadAnnouncements();
+      if (name === 'sidebar') loadSidebarAdmin();
+      if (name === 'settings') loadSettingsAdmin();
+      if (name === 'feedback') loadFeedbackAdmin();
       if (name === 'invites') loadInvites();
       if (name === 'collector') loadCollectorSources();
       if (name === 'pan') loadPanAccounts();
@@ -1013,7 +1379,7 @@
           document.getElementById('stat-today-active').innerText = s.today_active || 0;
           document.getElementById('stat-total-tokens').innerText = Number(s.total_tokens || 0).toLocaleString();
           document.getElementById('stat-interactions').innerText = (s.total_favorites + s.total_history + s.total_playlists + s.total_comments) || 0;
-          document.getElementById('sys-upstream-base').innerText = data.upstream_base || 'https://kanju26.com';
+          document.getElementById('sys-upstream-base').innerText = data.upstream_base || 'https://juchang8.com';
           document.getElementById('sys-cache-stat').innerText = `${data.cache_files_count || 0} 文件 (${(data.cache_size_mb || 0).toFixed(1)} MB)`;
         }
       } catch (e) {
@@ -1228,19 +1594,486 @@
       if (d.ok) { showToast('邀请码已删除'); loadInvites(); }
     }
 
-    // 发布全站公告
-    async function saveAnnouncement(e) {
+    // ==========================================
+    // 📢 全站公告管理 (Announcements)
+    // ==========================================
+    let allAnnouncements = [];
+
+    async function loadAnnouncements() {
+      const tbody = document.getElementById('announcements-table-body');
+      tbody.innerHTML = '<tr><td colspan="9" style="text-align:center; color:var(--text-muted); padding:30px;">正在加载公告列表...</td></tr>';
+      try {
+        const res = await fetch('/api/admin/announcements');
+        const d = await res.json();
+        if (!d.ok) throw new Error(d.error || '获取失败');
+        allAnnouncements = d.announcements || [];
+        if (allAnnouncements.length === 0) {
+          tbody.innerHTML = '<tr><td colspan="9" style="text-align:center; color:var(--text-muted); padding:30px;">暂无公告，点击右上角【新增公告】创建</td></tr>';
+          return;
+        }
+        const typeMap = {
+          modal: '<span class="tag tag-admin">弹窗提醒</span>',
+          banner: '<span class="tag tag-user">顶部横幅</span>',
+          sidebar: '<span class="tag tag-purple">侧栏卡片</span>',
+          marquee: '<span class="tag tag-amber">滚动跑马灯</span>'
+        };
+        tbody.innerHTML = allAnnouncements.map(a => {
+          const contentSnippet = (a.content || '').replace(/<[^>]+>/g, '').slice(0, 36);
+          const linkHtml = a.target_url ? `<a href="${a.target_url}" target="_blank" style="color:var(--cyan); text-decoration:none;">${a.target_url.slice(0, 24)}...</a>` : '<span style="color:var(--text-muted);">-</span>';
+          const timeStr = a.created_at ? new Date(a.created_at * 1000).toLocaleString() : '-';
+          return `
+            <tr>
+              <td><span style="font-family:monospace; color:var(--text-muted);">${a.id}</span></td>
+              <td><strong>${escapeHtml(a.title)}</strong></td>
+              <td>${typeMap[a.type] || a.type}</td>
+              <td style="color:var(--text-muted); max-width:260px;" title="${escapeHtml(a.content || '')}">${escapeHtml(contentSnippet)}</td>
+              <td>${linkHtml}</td>
+              <td><span class="tag tag-gray">${a.sort_order ?? 100}</span></td>
+              <td>
+                <label class="switch">
+                  <input type="checkbox" ${a.is_active ? 'checked' : ''} onchange="toggleAnnouncement(${a.id})">
+                  <span class="slider"></span>
+                </label>
+              </td>
+              <td style="font-size:12px; color:var(--text-muted);">${timeStr}</td>
+              <td style="text-align:right;">
+                <div style="display:inline-flex; gap:6px;">
+                  <button class="btn btn-secondary btn-sm" onclick="editAnnouncement(${a.id})">编辑</button>
+                  <button class="btn btn-danger btn-sm" onclick="deleteAnnouncement(${a.id})">删除</button>
+                </div>
+              </td>
+            </tr>
+          `;
+        }).join('');
+      } catch (e) {
+        tbody.innerHTML = `<tr><td colspan="9" style="text-align:center; color:var(--red); padding:20px;">加载失败: ${e.message}</td></tr>`;
+      }
+    }
+
+    function openAddAnnouncementModal() {
+      document.getElementById('modal-announcement-title').innerText = '📢 新增全站公告';
+      document.getElementById('modal-announce-id').value = '';
+      document.getElementById('modal-announce-title').value = '';
+      document.getElementById('modal-announce-type').value = 'modal';
+      document.getElementById('modal-announce-content').value = '';
+      document.getElementById('modal-announce-url').value = '';
+      document.getElementById('modal-announce-sort').value = '100';
+      document.getElementById('modal-announce-active').checked = true;
+      openModal('modal-announcement');
+    }
+
+    function editAnnouncement(id) {
+      const a = allAnnouncements.find(x => x.id === id);
+      if (!a) return;
+      document.getElementById('modal-announcement-title').innerText = '✏️ 编辑全站公告';
+      document.getElementById('modal-announce-id').value = a.id;
+      document.getElementById('modal-announce-title').value = a.title || '';
+      document.getElementById('modal-announce-type').value = a.type || 'modal';
+      document.getElementById('modal-announce-content').value = a.content || '';
+      document.getElementById('modal-announce-url').value = a.target_url || '';
+      document.getElementById('modal-announce-sort').value = a.sort_order ?? 100;
+      document.getElementById('modal-announce-active').checked = !!a.is_active;
+      openModal('modal-announcement');
+    }
+
+    async function submitAnnouncement() {
+      const id = document.getElementById('modal-announce-id').value;
+      const title = document.getElementById('modal-announce-title').value.trim();
+      const type = document.getElementById('modal-announce-type').value;
+      const content = document.getElementById('modal-announce-content').value.trim();
+      const target_url = document.getElementById('modal-announce-url').value.trim();
+      const sort_order = parseInt(document.getElementById('modal-announce-sort').value) || 100;
+      const is_active = document.getElementById('modal-announce-active').checked ? 1 : 0;
+
+      if (!title || !content) return showToast('请填写标题和内容', 'error');
+
+      const url = id ? `/api/admin/announcements/${id}/update` : '/api/admin/announcements';
+      try {
+        const res = await fetch(url, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ title, type, content, target_url, sort_order, is_active })
+        });
+        const d = await res.json();
+        if (d.ok) {
+          showToast(id ? '公告已成功更新' : '公告已成功发布');
+          closeModal('modal-announcement');
+          loadAnnouncements();
+        } else {
+          showToast(d.error || '保存失败', 'error');
+        }
+      } catch (e) {
+        showToast('网络错误: ' + e.message, 'error');
+      }
+    }
+
+    async function toggleAnnouncement(id) {
+      try {
+        const res = await fetch(`/api/admin/announcements/${id}/toggle`, { method: 'POST' });
+        const d = await res.json();
+        if (d.ok) {
+          showToast('公告状态已切换');
+          loadAnnouncements();
+        } else {
+          showToast(d.error || '切换失败', 'error');
+        }
+      } catch (e) {
+        showToast('请求失败', 'error');
+      }
+    }
+
+    async function deleteAnnouncement(id) {
+      if (!confirm('确定彻底删除该条公告？')) return;
+      try {
+        const res = await fetch(`/api/admin/announcements/${id}`, { method: 'DELETE' });
+        const d = await res.json();
+        if (d.ok) {
+          showToast('公告已删除');
+          loadAnnouncements();
+        } else {
+          showToast(d.error || '删除失败', 'error');
+        }
+      } catch (e) {
+        showToast('请求失败', 'error');
+      }
+    }
+
+    // ==========================================
+    // 📑 侧边栏与主导航管理 (Sidebar & Navigation)
+    // ==========================================
+    let allSidebarItems = [];
+
+    async function loadSidebarAdmin() {
+      const tbody = document.getElementById('sidebar-table-body');
+      tbody.innerHTML = '<tr><td colspan="10" style="text-align:center; color:var(--text-muted); padding:30px;">正在加载导航项目...</td></tr>';
+      try {
+        const res = await fetch('/api/admin/sidebar');
+        const d = await res.json();
+        if (!d.ok) throw new Error(d.error || '获取失败');
+        allSidebarItems = d.items || [];
+        filterSidebarItems();
+      } catch (e) {
+        tbody.innerHTML = `<tr><td colspan="10" style="text-align:center; color:var(--red); padding:20px;">加载失败: ${e.message}</td></tr>`;
+      }
+    }
+
+    function filterSidebarItems() {
+      const tbody = document.getElementById('sidebar-table-body');
+      const filterSection = document.getElementById('sidebar-filter-section').value;
+      const items = filterSection === 'all' ? allSidebarItems : allSidebarItems.filter(x => x.section === filterSection);
+
+      if (items.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="10" style="text-align:center; color:var(--text-muted); padding:30px;">暂无相关导航项</td></tr>';
+        return;
+      }
+
+      const secMap = {
+        nav: '<span class="tag tag-user">主导航 (nav)</span>',
+        widget: '<span class="tag tag-purple">侧栏组件 (widget)</span>',
+        link: '<span class="tag tag-gray">友情链接 (link)</span>'
+      };
+
+      const roleMap = {
+        all: '<span class="tag tag-active">全员</span>',
+        member: '<span class="tag tag-user">会员</span>',
+        admin: '<span class="tag tag-admin">管理员</span>'
+      };
+
+      tbody.innerHTML = items.map(it => {
+        const badgeHtml = it.badge ? `<span class="tag tag-amber">${escapeHtml(it.badge)}</span>` : '<span style="color:var(--text-muted);">-</span>';
+        const extHtml = it.is_external ? '<span style="color:var(--cyan); font-weight:700;">是</span>' : '<span style="color:var(--text-muted);">否</span>';
+        return `
+          <tr>
+            <td><span style="font-family:monospace; color:var(--text-muted);">${it.id}</span></td>
+            <td><span style="font-size:16px; margin-right:6px;">${escapeHtml(it.icon || '🎬')}</span><strong>${escapeHtml(it.title)}</strong></td>
+            <td><code style="color:var(--cyan); font-size:12px;">${escapeHtml(it.path)}</code></td>
+            <td>${secMap[it.section] || it.section}</td>
+            <td>${badgeHtml}</td>
+            <td>${roleMap[it.required_role] || it.required_role}</td>
+            <td>${extHtml}</td>
+            <td><span class="tag tag-gray">${it.sort_order ?? 100}</span></td>
+            <td>
+              <label class="switch">
+                <input type="checkbox" ${it.is_active ? 'checked' : ''} onchange="toggleSidebarItem(${it.id})">
+                <span class="slider"></span>
+              </label>
+            </td>
+            <td style="text-align:right;">
+              <div style="display:inline-flex; gap:6px;">
+                <button class="btn btn-secondary btn-sm" onclick="editSidebarItem(${it.id})">编辑</button>
+                <button class="btn btn-danger btn-sm" onclick="deleteSidebarItem(${it.id})">删除</button>
+              </div>
+            </td>
+          </tr>
+        `;
+      }).join('');
+    }
+
+    function openAddSidebarModal() {
+      document.getElementById('modal-sidebar-title').innerText = '📑 新增导航/侧栏项';
+      document.getElementById('modal-sidebar-id').value = '';
+      document.getElementById('modal-sidebar-name').value = '';
+      document.getElementById('modal-sidebar-icon').value = '🎬';
+      document.getElementById('modal-sidebar-path').value = '';
+      document.getElementById('modal-sidebar-section').value = 'nav';
+      document.getElementById('modal-sidebar-badge').value = '';
+      document.getElementById('modal-sidebar-role').value = 'all';
+      document.getElementById('modal-sidebar-sort').value = '100';
+      document.getElementById('modal-sidebar-external').checked = false;
+      document.getElementById('modal-sidebar-active').checked = true;
+      openModal('modal-sidebar');
+    }
+
+    function editSidebarItem(id) {
+      const it = allSidebarItems.find(x => x.id === id);
+      if (!it) return;
+      document.getElementById('modal-sidebar-title').innerText = '✏️ 编辑导航/侧栏项';
+      document.getElementById('modal-sidebar-id').value = it.id;
+      document.getElementById('modal-sidebar-name').value = it.title || '';
+      document.getElementById('modal-sidebar-icon').value = it.icon || '🎬';
+      document.getElementById('modal-sidebar-path').value = it.path || '';
+      document.getElementById('modal-sidebar-section').value = it.section || 'nav';
+      document.getElementById('modal-sidebar-badge').value = it.badge || '';
+      document.getElementById('modal-sidebar-role').value = it.required_role || 'all';
+      document.getElementById('modal-sidebar-sort').value = it.sort_order ?? 100;
+      document.getElementById('modal-sidebar-external').checked = !!it.is_external;
+      document.getElementById('modal-sidebar-active').checked = !!it.is_active;
+      openModal('modal-sidebar');
+    }
+
+    async function submitSidebarItem() {
+      const id = document.getElementById('modal-sidebar-id').value;
+      const title = document.getElementById('modal-sidebar-name').value.trim();
+      const icon = document.getElementById('modal-sidebar-icon').value.trim();
+      const path = document.getElementById('modal-sidebar-path').value.trim();
+      const section = document.getElementById('modal-sidebar-section').value;
+      const badge = document.getElementById('modal-sidebar-badge').value.trim();
+      const required_role = document.getElementById('modal-sidebar-role').value;
+      const sort_order = parseInt(document.getElementById('modal-sidebar-sort').value) || 100;
+      const is_external = document.getElementById('modal-sidebar-external').checked ? 1 : 0;
+      const is_active = document.getElementById('modal-sidebar-active').checked ? 1 : 0;
+
+      if (!title || !path) return showToast('请填写名称和路由路径', 'error');
+
+      const url = id ? `/api/admin/sidebar/${id}/update` : '/api/admin/sidebar';
+      try {
+        const res = await fetch(url, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ title, icon, path, section, badge, required_role, sort_order, is_external, is_active })
+        });
+        const d = await res.json();
+        if (d.ok) {
+          showToast(id ? '导航项已更新' : '导航项已添加');
+          closeModal('modal-sidebar');
+          loadSidebarAdmin();
+        } else {
+          showToast(d.error || '保存失败', 'error');
+        }
+      } catch (e) {
+        showToast('网络错误: ' + e.message, 'error');
+      }
+    }
+
+    async function toggleSidebarItem(id) {
+      try {
+        const res = await fetch(`/api/admin/sidebar/${id}/toggle`, { method: 'POST' });
+        const d = await res.json();
+        if (d.ok) {
+          showToast('导航项状态已切换');
+          loadSidebarAdmin();
+        } else {
+          showToast(d.error || '切换失败', 'error');
+        }
+      } catch (e) {
+        showToast('请求失败', 'error');
+      }
+    }
+
+    async function deleteSidebarItem(id) {
+      if (!confirm('确定删除该导航项目？')) return;
+      try {
+        const res = await fetch(`/api/admin/sidebar/${id}`, { method: 'DELETE' });
+        const d = await res.json();
+        if (d.ok) {
+          showToast('导航项已删除');
+          loadSidebarAdmin();
+        } else {
+          showToast(d.error || '删除失败', 'error');
+        }
+      } catch (e) {
+        showToast('请求失败', 'error');
+      }
+    }
+
+    // ==========================================
+    // ⚙️ 站点全局配置 (Site Global Settings)
+    // ==========================================
+    async function loadSettingsAdmin() {
+      try {
+        const res = await fetch('/api/admin/settings');
+        const d = await res.json();
+        if (!d.ok) throw new Error(d.error || '加载配置失败');
+        const s = d.settings || {};
+        const setVal = (k, def = '') => {
+          const el = document.getElementById(`setting-${k}`);
+          if (!el) return;
+          const v = (s[k] && s[k].value !== undefined) ? s[k].value : def;
+          if (el.type === 'checkbox') {
+            el.checked = v === '1' || v === 1 || v === 'true' || v === true;
+          } else {
+            el.value = v;
+          }
+        };
+
+        setVal('site_domain', 'juchang8.com');
+        setVal('permanent_domains', 'juchang8.com, juchang8.cc');
+        setVal('domain_banner_enabled', '1');
+        setVal('domain_banner_text', '📢 剧场8 官方永久域名：juchang8.com，请按 Ctrl+D 收藏加入书签防失联！');
+        setVal('site_name', '剧场8');
+        setVal('site_subtitle', 'AI 智能影音视听殿堂 · 蓝光4K专线');
+        setVal('seo_title', '剧场8 - JUCHANG8.COM - 高清电影电视剧在线观看');
+        setVal('seo_keywords', '剧场8, juchang8, juchang8.com, 电影, 电视剧, 动漫, 4K高清');
+        setVal('seo_description', '剧场8 (juchang8.com) 为您提供全网海量高清影视资源与 4K 极速播放体验...');
+        setVal('registration_enabled', '1');
+        setVal('default_tokens', '100');
+        setVal('contact_email', 'admin@juchang8.com');
+        setVal('icp_beian', '京ICP备20268888号-1 · © 2026 juchang8.com All Rights Reserved');
+        setVal('footer_html', '');
+      } catch (e) {
+        showToast('加载站点配置失败: ' + e.message, 'error');
+      }
+    }
+
+    async function saveSiteSettings(e) {
       e.preventDefault();
-      const title = document.getElementById('announce-title').value.trim();
-      const body = document.getElementById('announce-body').value.trim();
-      const res = await fetch('/api/admin/announcements', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ title, body })
-      });
-      const d = await res.json();
-      if (d.ok) showToast('全站公告已成功更新发布！');
-      else showToast(d.error || '发布失败', 'error');
+      const getVal = (k) => {
+        const el = document.getElementById(`setting-${k}`);
+        if (!el) return '';
+        if (el.type === 'checkbox') return el.checked ? '1' : '0';
+        return el.value.trim();
+      };
+
+      const keys = [
+        'site_domain', 'permanent_domains', 'domain_banner_enabled', 'domain_banner_text',
+        'site_name', 'site_subtitle', 'seo_title', 'seo_keywords', 'seo_description',
+        'registration_enabled', 'default_tokens', 'contact_email', 'icp_beian', 'footer_html'
+      ];
+
+      const settings = {};
+      keys.forEach(k => { settings[k] = getVal(k); });
+
+      try {
+        const res = await fetch('/api/admin/settings', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ settings })
+        });
+        const d = await res.json();
+        if (d.ok) {
+          showToast('站点全局配置已保存成功！');
+          loadSettingsAdmin();
+        } else {
+          showToast(d.error || '保存失败', 'error');
+        }
+      } catch (err) {
+        showToast('保存出错: ' + err.message, 'error');
+      }
+    }
+
+    // ==========================================
+    // 📮 用户反馈与留言工单 (Feedback)
+    // ==========================================
+    let allFeedbackItems = [];
+
+    async function loadFeedbackAdmin() {
+      const tbody = document.getElementById('feedback-table-body');
+      tbody.innerHTML = '<tr><td colspan="8" style="text-align:center; color:var(--text-muted); padding:30px;">正在加载反馈工单...</td></tr>';
+      try {
+        const res = await fetch('/api/admin/feedback');
+        const d = await res.json();
+        if (!d.ok) throw new Error(d.error || '获取失败');
+        allFeedbackItems = d.feedback || d.items || [];
+        filterFeedbackItems();
+      } catch (e) {
+        tbody.innerHTML = `<tr><td colspan="8" style="text-align:center; color:var(--red); padding:20px;">加载失败: ${e.message}</td></tr>`;
+      }
+    }
+
+    function filterFeedbackItems() {
+      const tbody = document.getElementById('feedback-table-body');
+      const filterStatus = document.getElementById('feedback-filter-status').value;
+      const items = filterStatus === 'all' ? allFeedbackItems : allFeedbackItems.filter(x => (x.status || 'pending') === filterStatus);
+
+      if (items.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="8" style="text-align:center; color:var(--text-muted); padding:30px;">暂无相关反馈工单</td></tr>';
+        return;
+      }
+
+      tbody.innerHTML = items.map(f => {
+        const userDisplay = f.user_account ? `<strong>${escapeHtml(f.user_account)}</strong>` : (f.user_id ? `UID: ${f.user_id}` : '<span style="color:var(--text-muted);">匿名访客</span>');
+        const timeStr = f.created_at ? new Date(f.created_at * 1000).toLocaleString() : '-';
+        const contactStr = f.contact ? escapeHtml(f.contact) : '<span style="color:var(--text-muted);">-</span>';
+        const ipStr = f.ip ? `<div style="font-size:11px; color:var(--text-muted);">${escapeHtml(f.ip)}</div>` : '';
+        const curStatus = f.status || 'pending';
+
+        return `
+          <tr>
+            <td><span style="font-family:monospace; color:var(--text-muted);">${f.id}</span></td>
+            <td>${userDisplay}</td>
+            <td><span class="tag tag-admin">${escapeHtml(f.type || '用户反馈')}</span></td>
+            <td style="max-width:320px; line-height:1.5;">${escapeHtml(f.content || '')}</td>
+            <td>${contactStr}</td>
+            <td style="font-size:12px;"><div>${timeStr}</div>${ipStr}</td>
+            <td>
+              <select class="form-input" style="height:28px; padding:2px 6px; font-size:12px; width:95px;" onchange="updateFeedbackStatus(${f.id}, this.value)">
+                <option value="pending" ${curStatus === 'pending' ? 'selected' : ''}>⏳ 待处理</option>
+                <option value="processing" ${curStatus === 'processing' ? 'selected' : ''}>🔄 处理中</option>
+                <option value="resolved" ${curStatus === 'resolved' ? 'selected' : ''}>✅ 已解决</option>
+                <option value="closed" ${curStatus === 'closed' ? 'selected' : ''}>🔒 已关闭</option>
+              </select>
+            </td>
+            <td style="text-align:right;">
+              <button class="btn btn-danger btn-sm" onclick="deleteFeedbackItem(${f.id})">删除</button>
+            </td>
+          </tr>
+        `;
+      }).join('');
+    }
+
+    async function updateFeedbackStatus(id, status) {
+      try {
+        const res = await fetch(`/api/admin/feedback/${id}/status`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ status })
+        });
+        const d = await res.json();
+        if (d.ok) {
+          showToast('工单状态已更新');
+          loadFeedbackAdmin();
+        } else {
+          showToast(d.error || '更新失败', 'error');
+        }
+      } catch (e) {
+        showToast('请求失败', 'error');
+      }
+    }
+
+    async function deleteFeedbackItem(id) {
+      if (!confirm('确定删除该条反馈记录？')) return;
+      try {
+        const res = await fetch(`/api/admin/feedback/${id}`, { method: 'DELETE' });
+        const d = await res.json();
+        if (d.ok) {
+          showToast('反馈已删除');
+          loadFeedbackAdmin();
+        } else {
+          showToast(d.error || '删除失败', 'error');
+        }
+      } catch (e) {
+        showToast('请求失败', 'error');
+      }
     }
 
     // 上游测速与测试

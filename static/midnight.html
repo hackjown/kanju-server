@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>午夜剧场 · 18+ | 看剧AI - KANJU.AI</title>
+<title>午夜剧场 · 18+ | 剧场8 - JUCHANG8.COM</title>
 <script src="/static/hls.min.js"></script>
 <style>
   :root{--bg:#0b0a12;--card:#15122298;--gold:#e8b44a;--txt:#e9e6f2;--dim:#8f8aa6;--red:#e2504a}
@@ -253,8 +253,8 @@ function checkFlow(){
       if(!st.upstream_bound){
         showGate('差最后一步：绑定运营者原站账号',
           '原站午夜池是<b>账号专属</b>的（资格、片池、生成都绑在原站账号上，匿名会话会被上游 401 拒绝，这一点已实测）。'+
-          '要让片池完全对上，需要站长把自己的 kanju 账号会话放到服务器应用目录的 <code>kanju_upstream.json</code>：<br>'+
-          '<pre>{\n  "cookie": "（从自己浏览器登录 kanju45.com 后复制的 Cookie）",\n  "base": "https://kanju26.com"\n}</pre>'+
+          '要让片池完全对上，需要站长把自己的账号会话放到服务器应用目录的 <code>juchang8_upstream.json</code>（或 <code>kanju_upstream.json</code>）：<br>'+
+          '<pre>{\n  "cookie": "（从浏览器登录后复制的 Cookie）",\n  "base": "https://kanju26.com"\n}</pre>'+
           '放好后刷新本页即可，文件只存服务器本地、不经过聊天。在此之前可以先看本地聚合版（片目与原站专属池不完全一致）。',
           [{label:'先看本地聚合版',gold:true,fn:function(){
               $('gate').style.display='none'; $('listBox').style.display='block';
@@ -267,7 +267,7 @@ function checkFlow(){
       Promise.all([req('/mn/access'),req('/mn/eligibility')]).then(function(rs){
         var acc=(rs[0].result||{}), eli=(rs[1].result||{});
         if(rs[0].upstream_status===401||rs[1].upstream_status===401){
-          showGate('原站会话已失效','绑定的原站账号会话过期了，请站长更新 kanju_upstream.json 后刷新。',[
+          showGate('上游会话已失效','绑定的上游账号会话过期了，请站长更新 juchang8_upstream.json 后刷新。',[
             {label:'刷新重试',gold:true,fn:function(){ location.reload(); }}]);
           return;
         }

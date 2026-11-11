@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8"/>
 <meta name="viewport" content="width=device-width,initial-scale=1"/>
-<title>看剧AI - KANJU.AI</title>
+<title>剧场8 - JUCHANG8.COM</title>
 <style>
 :root{--bg:#0d0f14;--card:#171a21;--line:#252a34;--fg:#e9e6df;--dim:#8b8579;--acc:#e8b44a}
 *{box-sizing:border-box}
@@ -1090,11 +1090,11 @@ setTimeout(kjInit, 400);
 
 <div id="kjAuthMask"><div id="kjAuthBox">
   <span id="kjAuthClose">×</span>
-  <h3 id="kjAuthTitle">登录 看剧AI</h3>
+  <h3 id="kjAuthTitle">登录 剧场8</h3>
   <div class="tip" id="kjAuthTip">登录后收藏、观看历史、进度会跟随账号</div>
   <label>账号</label><input id="kjAuthAcc" placeholder="账号（≥4 位）" autocomplete="username"/>
   <label>密码</label><input id="kjAuthPwd" type="password" placeholder="密码（≥6 位）" autocomplete="current-password"/>
-  <div id="kjInviteWrap" style="display:none"><label>邀请码</label><input id="kjAuthInv" placeholder="邀请码（如 KANJU2026）"/></div>
+  <div id="kjInviteWrap" style="display:none"><label>邀请码</label><input id="kjAuthInv" placeholder="邀请码（如 JUCHANG8）"/></div>
   <div id="kjAuthErr"></div>
   <button id="kjAuthBtn">登录</button>
   <div id="kjAuthSw">还没有账号？<a id="kjAuthToggle">立即注册</a></div>
@@ -1631,7 +1631,7 @@ function castDialog(){
 function boot5(){
   if(!localStorage.getItem('kjDomainBarOff')){
     var bar=E('div'); bar.id='kjDomainBar';
-    bar.innerHTML='📌 永久域名 <b>kanju.ai</b>，请收藏防走失 —— 当前域名无法访问时，用永久域名进入。';
+    bar.innerHTML='📌 永久域名 <b>juchang8.com</b>，请收藏防走失 —— 当前域名无法访问时，用永久域名进入。';
     var x=E('button','x','知道了'); x.onclick=function(){ bar.remove(); localStorage.setItem('kjDomainBarOff','1'); };
     bar.appendChild(x); document.body.insertBefore(bar, document.body.firstChild);
   }

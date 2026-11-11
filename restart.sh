@@ -1,5 +1,5 @@
 #!/bin/bash
-# 重启复刻站：先杀旧进程（用端口找 PID，不用 pkill -f 避免杀到自己），再后台启动
+# 重启剧场8服务：先杀旧进程（用端口找 PID，不用 pkill -f 避免杀到自己），再后台启动
 cd "$(dirname "$0")"
 
 # 1) 用 lsof/ss 找占 8077 的进程并杀掉
@@ -15,13 +15,13 @@ if [ -n "$PIDS" ]; then
 fi
 
 # 2) 后台启动
-rm -f /tmp/kanju.log
+rm -f /tmp/juchang8.log /tmp/kanju.log
 if [ -x ".venv/bin/python3" ]; then
   PY=".venv/bin/python3"
 else
   PY="python3"
 fi
-nohup $PY app.py > /tmp/kanju.log 2>&1 &
+nohup $PY app.py > /tmp/juchang8.log 2>&1 &
 echo "started pid=$!"
 
 # 3) 轮询端口最多 20 秒
@@ -34,4 +34,4 @@ for i in $(seq 1 20); do
   fi
 done
 echo "--- 日志尾部 ---"
-tail -15 /tmp/kanju.log
+tail -15 /tmp/juchang8.log

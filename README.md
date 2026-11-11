@@ -1,53 +1,88 @@
-# 看剧AI 复刻站 · 会员系统版
+# 剧场8 (juchang8.com) 智能影视系统 · 商业化全功能版
 
-在原「14项补齐版」基础上新增 **会员注册系统**，并按原站（kanju1.ai）的鉴权分层把两个功能接进会员：
+官方永久域名：**juchang8.com**（备用发布页：juchang8.cc）
 
-1. **历史记录 / 收藏 / 记忆续看 → 接入会员账号**（原来只存浏览器 localStorage，换设备就丢）
-2. **18+（午夜剧场 `/midnight-theater`）→ 从会员入口进入**（登录 + 成年确认两个门槛，照原站实测）
+在商业运营版本基础上全面升级 **后台全站管理系统** 与 **多端播放架构**：
 
-## 运行
+1. **全站后台管理补齐**：全站公告管理（弹窗/顶部横幅/侧栏卡片/跑马灯）、侧边栏与主导航管理（主导航/侧栏卡片/友情链接动态配置）、站点全局配置（域名/防失联提醒/SEO/用户注册/词元策略/页脚HTML）、用户反馈工单管理。
+2. **全面更名与域名升级**：全站前后端与数据库全面更名为 `juchang8`，正式永久绑定官方主域名 `juchang8.com`，同时无缝平滑向下兼容历史 `kanju` 数据库与接口调用。
+3. **极速车机与大屏专属版**：针对特斯拉与主流车机屏幕优化的极速车机版（`/car`），采用 WebCodecs 硬件解复用 + WebGL 逐帧渲染 + WebAudio 环形缓冲，彻底杜绝黑屏与卡顿。
+
+## 快速运行与部署
 
 ```bash
-bash start.sh      # 前台启动
-bash restart.sh    # 后台重启（端口 8077，日志 /tmp/kanju.log）
+# 方式一：Docker Compose 一键启动（推荐）
+docker-compose up -d --build
+
+# 方式二：后台脚本启动
+bash restart.sh    # 后台重启（端口 8077，日志 /tmp/juchang8.log）
+
+# 方式三：前台调试启动
+bash start.sh
 ```
 
-> 首次启动会自动建库 `kanju.db`（sqlite）。
+> 系统会自动挂载并读写 `juchang8.db`（SQLite，同时与 `kanju.db` 硬链接互通，零磁盘浪费且百分之百兼容）。
 
-## 账号体系（照原站 /v1/users/password/* 的规则简化）
+## 账号与后台管理体系
 
-| 项 | 规则 |
+| 项 | 规则与入口 |
 |---|---|
-| 注册 | `POST /api/auth/register` 账号≥4 位、密码≥6 位、**必须邀请码** |
-| 邀请码 | `KANJU2026` / `KANJU-VIP` / `WEISHAO`（`kanju_member.py` 的 `INVITE_CODES`） |
-| 密码 | PBKDF2-HMAC-SHA256，12 万轮，每人独立 salt |
-| 会话 | `secrets.token_urlsafe(32)`，cookie `kj_sid`，HttpOnly + SameSite=Lax，30 天 |
-| 用户字段 | account / nickname / level（等级）/ tokens（词元）/ growth（成长值）/ adult_confirmed |
-| 登录 | `POST /api/auth/login`、退出 `POST /api/auth/logout`、当前用户 `GET /api/auth/me` |
+| 后台管理入口 | 浏览器访问 `/admin`（默认超级管理账号 `admin`，密码 `admin888` 或 `admin123456`，站长账号 `hackjown` 亦具完整权限） |
+| 官方永久域名 | `juchang8.com`（全站各端均以此为主域名） |
+| 会员注册 | `POST /api/auth/register` 账号≥4 位、密码≥6 位、可选邀请码（支持后台开关自主注册） |
+| 默认邀请码 | `JUCHANG8` / `JUCHANG8-VIP` / `JUCHANG82026` / `VIP888` / `ADMIN` |
+| 密码加密 | PBKDF2-HMAC-SHA256，12 万轮，每人独立 salt |
+| 会话与 Cookie | `secrets.token_urlsafe(32)`，cookie `juchang8_sid`（兼容 `kj_sid` / `ai_movie_session`），HttpOnly + SameSite=Lax |
+| 后台管理模块 | 控制台总览、用户账号管理、片单与评论、全站公告管理、侧边栏与主导航、站点全局配置、用户反馈工单、邀请码管理、采集源调度、网盘解析、系统运维 |
 
 ## 接口清单
 
-### 认证
+### 后台全站管理 API（`/api/admin/*`）
+- **公告管理**：
+  - `GET /api/admin/announcements`：获取全部公告（含弹窗、横幅、侧栏、跑马灯）
+  - `POST /api/admin/announcements`：新增全站公告
+  - `POST /api/admin/announcements/<id>/update`：编辑修改公告内容/位置/权重
+  - `POST /api/admin/announcements/<id>/toggle`：一键开启/停用公告
+  - `DELETE /api/admin/announcements/<id>`：彻底删除公告
+- **侧边栏与主导航管理**：
+  - `GET /api/admin/sidebar`：获取全部导航与侧栏组件
+  - `POST /api/admin/sidebar`：新增导航项/侧栏卡片/友情链接
+  - `POST /api/admin/sidebar/<id>/update`：修改标题、路径、图标、角色权限与角标
+  - `POST /api/admin/sidebar/<id>/toggle`：启用/停用导航项
+  - `DELETE /api/admin/sidebar/<id>`：删除导航项
+- **站点全局配置**：
+  - `GET /api/admin/settings`：获取当前全站设置（域名、SEO、注册模式、页脚HTML等）
+  - `POST /api/admin/settings`：批量保存全站设置（即时生效，无需重启服务）
+- **用户反馈工单**：
+  - `GET /api/admin/feedback`：查看用户留言、求片与播放故障工单
+  - `POST /api/admin/feedback/<id>/status`：更新工单处理状态（pending / processing / resolved / closed）
+  - `DELETE /api/admin/feedback/<id>`：删除工单记录
+
+### 前台开放 API
+- `GET /api/announcements`：前台获取启用的全站公告（按展示类型分类）
+- `GET /api/sidebar` / `GET /api/navigation`：前台动态渲染主导航与侧边栏
+- `GET /api/site/config`：前台获取站点名称、永久域名提醒与 SEO 信息
+- `POST /api/feedback`：用户提交工单与故障反馈
+
+### 认证与会员
 - `POST /api/auth/register` `{account,password,invite_code,nickname?}` → `{ok,user,sid}`
 - `POST /api/auth/login` `{account,password}` → `{ok,user,sid}`
 - `POST /api/auth/logout`
 - `GET  /api/auth/me` → `{ok,logged_in,user}`
 - `POST /api/auth/adult` `{adult_confirmed:true}` → 写进账号偏好
 
-### 收藏（需登录）
+### 收藏与观看历史
 - `GET    /api/fav` → `{items:[{cid,title,poster,added_at}]}`
 - `POST   /api/fav` `{cid,title,poster}` → `{ok,has:true}`
 - `DELETE /api/fav?cid=xxx`
-
-### 历史 / 续看（需登录）
-- `GET    /api/history` → `{items:[{cid,title,episode,position,duration,updated_at}]}`（最多 60 条）
+- `GET    /api/history` → `{items:[{cid,title,episode,position,duration,updated_at}]}`
 - `POST   /api/history` `{cid,title,episode,position,duration,poster}`
 - `DELETE /api/history`（或 `?cid=` 删单条）
 
 ### 18+ 午夜剧场（需登录 + 成年确认）
-- `GET /api/midnight/state` → 三态
-  - 未登录：`{"state":"locked","reason":"midnight_session_required","message":"请登录后进入午夜剧场"}`
-  - 已登录未确认：`{"state":"locked","reason":"adult_confirm_required","message":"请先确认您已满 18 岁"}`
+- `GET /api/midnight/state`
+- `GET /api/mn/access` / `GET /api/mn/eligibility`
+- 专属上游会话配置文件：`juchang8_upstream.json`（兼容 `kanju_upstream.json`）
   - 已确认：`{"state":"unlocked"}`
 - `GET /api/midnight/feed` → 解锁后返回内容（未解锁返回 `state:locked` 且 `count:0`）
 - 页面：`GET /midnight-theater`（`static/midnight.html`）

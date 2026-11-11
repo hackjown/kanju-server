@@ -8,6 +8,8 @@ __pycache__/
 cache/
 kanju.db-wal
 kanju.db-shm
+juchang8.db-wal
+juchang8.db-shm
 
 # 提示：若推送到公开(Public) GitHub 仓库，务必取消下方注释以防 115 VIP/夸克 Cookie 泄露！
 # kanju.db

@@ -1,4 +1,4 @@
-(function bootstrapKanjuPage() {
+(function bootstrapJuchang8Page() {
   document.documentElement.dataset.theme = "movie-dark";
   document.documentElement.classList.add("dark");
 
@@ -124,10 +124,11 @@
     }
 
     // 暴露全局快速签名 helper
-    window.__kanjuHmac = function(k, m) {
+    window.__juchang8Hmac = function(k, m) {
       var u8 = rawHmacSha256(k, m);
       return Array.from(u8, function(x) { return x.toString(16).padStart(2, "0"); }).join("");
     };
+    window.__kanjuHmac = window.__juchang8Hmac;
 
     // 1.3 crypto.subtle 垫片
     if (!window.crypto.subtle) {

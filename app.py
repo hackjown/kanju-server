@@ -489,8 +489,8 @@ def api_car_play(token):
     
     raw_lines = (d.get("line_options") or []) if (not err and isinstance(d, dict)) else []
 
-    kanju_4k_lines = []
-    kanju_normal_lines = []
+    juchang8_4k_lines = []
+    juchang8_normal_lines = []
 
     def _is4k(s):
         s = (s or "").upper()
@@ -527,16 +527,16 @@ def api_car_play(token):
                     pass
 
         item = {
-            "label": f"★ 官方4K · {lbl}" if is4k else f"官方 · {lbl}",
+            "label": f"★ 剧场8官方4K · {lbl}" if is4k else f"剧场8 · {lbl}",
             "kind": "hls" if ".m3u8" in real_url else kind,
             "url": real_url,
             "is_4k": is4k,
-            "source_type": "kanju"
+            "source_type": "juchang8"
         }
         if is4k:
-            kanju_4k_lines.append(item)
+            juchang8_4k_lines.append(item)
         else:
-            kanju_normal_lines.append(item)
+            juchang8_normal_lines.append(item)
 
     # 2. 获取本地 4K 采集源（暴风4K, 非凡4K, 量子4K, 天空4K）与普通采集源
     collector_4k_lines = []
@@ -566,17 +566,17 @@ def api_car_play(token):
             print(f"[CarPlay] Collector lines error: {e}")
 
     # 3. 车机专属严格排序：
-    # 梯队 1: Kanju 4K 官方源
+    # 梯队 1: 剧场8 4K 官方源
     # 梯队 2: 本地 4K 采集源 (暴风4K, 非凡4K, 量子4K, 天空4K)
-    # 梯队 3: 1080P 普通线路 (Kanju 1080P + 本地 1080P)
+    # 梯队 3: 1080P 普通线路 (剧场8 1080P + 本地 1080P)
     final_lines = []
-    for l in kanju_4k_lines:
+    for l in juchang8_4k_lines:
         if l.get("url"): final_lines.append(l)
 
     for l in collector_4k_lines:
         if l.get("url"): final_lines.append(l)
 
-    for l in (kanju_normal_lines + collector_normal_lines):
+    for l in (juchang8_normal_lines + collector_normal_lines):
         if l.get("url"): final_lines.append(l)
 
     return jsonify({
@@ -585,8 +585,8 @@ def api_car_play(token):
         "title": m_title,
         "ep_num": ep_num,
         "lines": final_lines,
-        "total_4k": len(kanju_4k_lines) + len(collector_4k_lines),
-        "total_normal": len(kanju_normal_lines) + len(collector_normal_lines)
+        "total_4k": len(juchang8_4k_lines) + len(collector_4k_lines),
+        "total_normal": len(juchang8_normal_lines) + len(collector_normal_lines)
     })
 
 
@@ -956,24 +956,24 @@ def api_suggest():
     return jsonify({"ok": True, "q": q, "items": items, "titles": titles})
 
 
-# ================= KANJU_MEMBER_ROUTES =================
-# 会员系统：注册 / 登录 / 登出 / 我 / 收藏 / 历史 / 18+ 偏好 / 午夜剧场
-import kanju_member as KM
-import kanju_plus as KP
-import kanju_collector as KC
-import kanju_pan as KPAN
-import kanju_dian115 as KD115
-import kanju_quark as KQ
+# ================= JUCHANG8_MEMBER_ROUTES =================
+# 剧场8 (juchang8.com) 会员系统：注册 / 登录 / 登出 / 我 / 收藏 / 历史 / 18+ 偏好 / 午夜剧场 / 全站管理
+import juchang8_member as KM
+import juchang8_plus as KP
+import juchang8_collector as KC
+import juchang8_pan as KPAN
+import juchang8_dian115 as KD115
+import juchang8_quark as KQ
 KP.init_plus()
 KC.init_collector_db()
 KPAN.init_pan_db()
 KQ.init_quark_hub_db()
 
-COOKIE = "kj_sid"
+COOKIE = "juchang8_sid"
 
 
 def _sid():
-    return request.cookies.get("ai_movie_session") or request.cookies.get(COOKIE) or (request.headers.get("X-KJ-Sid") or "")
+    return request.cookies.get("juchang8_sid") or request.cookies.get("ai_movie_session") or request.cookies.get("kj_sid") or request.cookies.get(COOKIE) or (request.headers.get("X-Juchang8-Sid") or request.headers.get("X-KJ-Sid") or "")
 
 
 def _me():
@@ -986,7 +986,9 @@ def _need_login():
 
 def _set_sid(resp, sid, days=30):
     resp.set_cookie(COOKIE, sid, max_age=days * 86400, httponly=True, samesite="Lax")
+    resp.set_cookie("juchang8_sid", sid, max_age=days * 86400, httponly=True, samesite="Lax")
     resp.set_cookie("ai_movie_session", sid, max_age=days * 86400, httponly=True, samesite="Lax")
+    resp.set_cookie("kj_sid", sid, max_age=days * 86400, httponly=True, samesite="Lax")
     return resp
 
 
@@ -1290,8 +1292,38 @@ def api_comment_del(cid_):
 
 
 @app.route("/api/announcements")
+@app.route("/announcements")
 def api_announcements():
-    return jsonify({"ok": True, "items": KP.ANNOUNCEMENTS})
+    items = KP.announcements_list(include_inactive=False)
+    return jsonify({"ok": True, "items": items})
+
+
+@app.route("/api/sidebar")
+def api_sidebar_public():
+    items = KP.sidebar_list(include_inactive=False)
+    grouped = {}
+    for it in items:
+        grouped.setdefault(it.get("section", "nav"), []).append(it)
+    return jsonify({"ok": True, "items": items, "grouped": grouped})
+
+
+@app.route("/api/navigation")
+def api_navigation_public():
+    items = KP.sidebar_list(include_inactive=False, section="nav")
+    return jsonify({"ok": True, "items": items})
+
+
+@app.route("/api/site/config")
+def api_site_config_public():
+    cfg = KP.settings_get_all()
+    public_keys = {
+        "site_name", "site_domain", "site_slogan", "domain_bar_enabled",
+        "domain_bar_text", "register_open", "require_invite", "daily_grant",
+        "play_cost", "play_cost_4k", "invite_reward", "default_player_mode",
+        "custom_footer_html"
+    }
+    pub = {k: v for k, v in cfg.items() if k in public_keys}
+    return jsonify({"ok": True, "config": pub})
 
 
 @app.route("/api/feedback", methods=["POST"])
@@ -1449,7 +1481,9 @@ def api_cast_devices():
 # （{"cookie": "...", "authorization": "...", "base": "..."} 任选其一/组合），
 # 或环境变量 KANJU_UPSTREAM_COOKIE / KANJU_UPSTREAM_AUTHORIZATION。文件不进代码仓库。
 import requests as _rq
-UPSTREAM_FILE = os.path.join(HERE, "kanju_upstream.json")
+UPSTREAM_FILE = os.path.join(HERE, "juchang8_upstream.json") if (
+    os.path.exists(os.path.join(HERE, "juchang8_upstream.json")) or not os.path.exists(os.path.join(HERE, "kanju_upstream.json"))
+) else os.path.join(HERE, "kanju_upstream.json")
 _up_sess = _rq.Session()
 _up_sess.headers.update({"User-Agent": UA})
 _up_state = {"loaded": False, "proof": None}
@@ -1462,10 +1496,10 @@ def _upstream_conf():
             conf = json.load(open(UPSTREAM_FILE, encoding="utf-8")) or {}
         except Exception:
             conf = {}
-    if os.environ.get("KANJU_UPSTREAM_COOKIE"):
-        conf["cookie"] = os.environ["KANJU_UPSTREAM_COOKIE"]
-    if os.environ.get("KANJU_UPSTREAM_AUTHORIZATION"):
-        conf["authorization"] = os.environ["KANJU_UPSTREAM_AUTHORIZATION"]
+    if os.environ.get("JUCHANG8_UPSTREAM_COOKIE") or os.environ.get("KANJU_UPSTREAM_COOKIE"):
+        conf["cookie"] = os.environ.get("JUCHANG8_UPSTREAM_COOKIE") or os.environ.get("KANJU_UPSTREAM_COOKIE")
+    if os.environ.get("JUCHANG8_UPSTREAM_AUTHORIZATION") or os.environ.get("KANJU_UPSTREAM_AUTHORIZATION"):
+        conf["authorization"] = os.environ.get("JUCHANG8_UPSTREAM_AUTHORIZATION") or os.environ.get("KANJU_UPSTREAM_AUTHORIZATION")
     return conf
 
 
@@ -2727,12 +2761,12 @@ def proxy_v1(subpath):
                 except Exception:
                     pass
 
-            # 3. 提取并分类上游 Kanju 线路（拆分出 kanju 4K 与 kanju 普通源）
+            # 3. 提取并分类上游 4K 与 普通线路（拆分出 剧场8 4K 与 剧场8 普通源）
             raw_upstream_lines = r.get("line_options", []) or []
-            kanju_4k_lines = []
-            kanju_normal_lines = []
+            juchang8_4k_lines = []
+            juchang8_normal_lines = []
 
-            def _is_kanju_4k(l):
+            def _is_juchang8_4k(l):
                 if not isinstance(l, dict):
                     return False
                 if l.get("is_4k") is True:
@@ -2743,15 +2777,15 @@ def proxy_v1(subpath):
             for l in raw_upstream_lines:
                 l["selected"] = False
                 l["default_priority"] = False
-                if _is_kanju_4k(l):
+                if _is_juchang8_4k(l):
                     l["is_4k"] = True
-                    kanju_4k_lines.append(l)
+                    juchang8_4k_lines.append(l)
                 else:
-                    kanju_normal_lines.append(l)
+                    juchang8_normal_lines.append(l)
 
             # 4. 按严格优先次序合并并赋权：
             # 第一梯队：网盘资源 (weight: 4000+)
-            # 第二梯队：kanju的4K (weight: 3000+)
+            # 第二梯队：剧场8的4K (weight: 3000+)
             # 第三梯队：我们的4K采集源 (weight: 2000+)
             # 第四梯队：普通采集源 (weight: 1000)
             ordered_lines = []
@@ -2760,7 +2794,7 @@ def proxy_v1(subpath):
                 l["preference_weight"] = 4000 - i * 10
                 ordered_lines.append(l)
 
-            for i, l in enumerate(kanju_4k_lines):
+            for i, l in enumerate(juchang8_4k_lines):
                 l["preference_weight"] = 3000 - i * 10
                 ordered_lines.append(l)
 
@@ -2768,21 +2802,21 @@ def proxy_v1(subpath):
                 l["preference_weight"] = 2000 - i * 10
                 ordered_lines.append(l)
 
-            normal_combined = kanju_normal_lines + collector_normal_lines
+            normal_combined = juchang8_normal_lines + collector_normal_lines
             for i, l in enumerate(normal_combined):
                 l["preference_weight"] = 1000 - i * 10
                 ordered_lines.append(l)
 
             # 5. 确定默认选中并置顶生效的第 1 条线路 (selected / default_priority)：
             # 第一优先级：若网盘已绑定激活且找到实际网盘资源，选网盘第 1 条！
-            # 第二优先级：否则若有 kanju 4K，选 kanju 4K 第 1 条！
+            # 第二优先级：否则若有 剧场8 4K，选 剧场8 4K 第 1 条！
             # 第三优先级：否则若有我们的 4K 采集源，选 4K 采集源第 1 条！
             # 第四优先级：最后兜底选中普通采集源第 1 条！
             chosen_line = None
             if has_acc and pan_shares and pan_lines:
                 chosen_line = pan_lines[0]
-            elif kanju_4k_lines:
-                chosen_line = kanju_4k_lines[0]
+            elif juchang8_4k_lines:
+                chosen_line = juchang8_4k_lines[0]
             elif collector_4k_lines:
                 chosen_line = collector_4k_lines[0]
             elif normal_combined:
@@ -3079,24 +3113,166 @@ def api_admin_delete_invite(code):
     return jsonify({"ok": True, "codes": sorted(list(KM.INVITE_CODES))})
 
 
+# ---------------- 1. 全站公告管理 (增删改查、弹窗/横幅/侧栏、开关) ----------------
+
 @app.route("/api/admin/announcements", methods=["GET", "POST"])
 @_admin_required
 def api_admin_announcements():
     if request.method == "GET":
-        return jsonify({"ok": True, "announcements": KP.ANNOUNCEMENTS})
+        return jsonify({"ok": True, "announcements": KP.announcements_list(include_inactive=True)})
     d = request.get_json(silent=True) or {}
     title = (d.get("title") or "").strip()
-    body = (d.get("body") or "").strip()
+    body = (d.get("body") or d.get("content") or "").strip()
+    a_type = (d.get("type") or "popup").strip()
+    link_url = (d.get("link_url") or d.get("target_url") or "").strip()
+    sort_order = int(d.get("sort_order") or 0)
+    is_active = int(d.get("is_active", 1))
     if not title or not body:
         return jsonify({"ok": False, "error": "标题和内容不能为空"}), 400
-    new_ann = {
-        "id": time.strftime("%Y-%m-%d"),
-        "version": len(KP.ANNOUNCEMENTS) + 1,
-        "title": title,
-        "body": body
-    }
-    KP.ANNOUNCEMENTS.insert(0, new_ann)
-    return jsonify({"ok": True, "announcements": KP.ANNOUNCEMENTS})
+    item = KP.announcements_create(title, body, a_type=a_type, link_url=link_url, is_active=is_active, sort_order=sort_order)
+    return jsonify({"ok": True, "item": item, "announcements": KP.announcements_list(include_inactive=True)})
+
+
+@app.route("/api/admin/announcements/<int:aid>/update", methods=["POST", "PUT"])
+@_admin_required
+def api_admin_announcements_update(aid):
+    d = request.get_json(silent=True) or {}
+    item = KP.announcements_update(
+        aid,
+        title=d.get("title"),
+        body=d.get("body") or d.get("content"),
+        a_type=d.get("type"),
+        link_url=d.get("link_url") or d.get("target_url"),
+        is_active=d.get("is_active"),
+        sort_order=d.get("sort_order")
+    )
+    if not item:
+        return jsonify({"ok": False, "error": "公告不存在"}), 404
+    return jsonify({"ok": True, "item": item, "announcements": KP.announcements_list(include_inactive=True)})
+
+
+@app.route("/api/admin/announcements/<int:aid>/toggle", methods=["POST"])
+@_admin_required
+def api_admin_announcements_toggle(aid):
+    item = KP.announcements_toggle(aid)
+    if not item:
+        return jsonify({"ok": False, "error": "公告不存在"}), 404
+    return jsonify({"ok": True, "item": item, "announcements": KP.announcements_list(include_inactive=True)})
+
+
+@app.route("/api/admin/announcements/<int:aid>", methods=["DELETE"])
+@_admin_required
+def api_admin_announcements_delete(aid):
+    KP.announcements_delete(aid)
+    return jsonify({"ok": True, "announcements": KP.announcements_list(include_inactive=True)})
+
+
+# ---------------- 2. 侧边栏与主导航管理 (增删改查、分组、开关) ----------------
+
+@app.route("/api/admin/sidebar", methods=["GET", "POST"])
+@_admin_required
+def api_admin_sidebar():
+    if request.method == "GET":
+        section = request.args.get("section")
+        return jsonify({"ok": True, "items": KP.sidebar_list(include_inactive=True, section=section)})
+    d = request.get_json(silent=True) or {}
+    title = (d.get("title") or "").strip()
+    url = (d.get("url") or d.get("path") or "").strip()
+    target = "_blank" if d.get("is_external") else (d.get("target") or "_self")
+    badge = (d.get("badge_text") or d.get("badge") or "").strip()
+    if not title or not url:
+        return jsonify({"ok": False, "error": "标题和链接地址不能为空"}), 400
+    item = KP.sidebar_create(
+        section=d.get("section") or "nav",
+        title=title,
+        subtitle=(d.get("subtitle") or "").strip(),
+        icon=(d.get("icon") or "").strip(),
+        url=url,
+        target=target,
+        badge_text=badge,
+        sort_order=int(d.get("sort_order") or 0),
+        is_active=int(d.get("is_active", 1)),
+        extra_data=d.get("extra_data") or ""
+    )
+    return jsonify({"ok": True, "item": item, "items": KP.sidebar_list(include_inactive=True)})
+
+
+@app.route("/api/admin/sidebar/<int:sid>/update", methods=["POST", "PUT"])
+@_admin_required
+def api_admin_sidebar_update(sid):
+    d = request.get_json(silent=True) or {}
+    target = "_blank" if d.get("is_external") else d.get("target")
+    item = KP.sidebar_update(
+        sid,
+        section=d.get("section"),
+        title=d.get("title"),
+        subtitle=d.get("subtitle"),
+        icon=d.get("icon"),
+        url=d.get("url") or d.get("path"),
+        target=target,
+        badge_text=d.get("badge_text") or d.get("badge"),
+        sort_order=d.get("sort_order"),
+        is_active=d.get("is_active"),
+        extra_data=d.get("extra_data")
+    )
+    if not item:
+        return jsonify({"ok": False, "error": "项目不存在"}), 404
+    return jsonify({"ok": True, "item": item, "items": KP.sidebar_list(include_inactive=True)})
+
+
+@app.route("/api/admin/sidebar/<int:sid>/toggle", methods=["POST"])
+@_admin_required
+def api_admin_sidebar_toggle(sid):
+    item = KP.sidebar_toggle(sid)
+    if not item:
+        return jsonify({"ok": False, "error": "项目不存在"}), 404
+    return jsonify({"ok": True, "item": item, "items": KP.sidebar_list(include_inactive=True)})
+
+
+@app.route("/api/admin/sidebar/<int:sid>", methods=["DELETE"])
+@_admin_required
+def api_admin_sidebar_delete(sid):
+    KP.sidebar_delete(sid)
+    return jsonify({"ok": True, "items": KP.sidebar_list(include_inactive=True)})
+
+
+# ---------------- 3. 全局站点配置系统 (KV 设定) ----------------
+
+@app.route("/api/admin/settings", methods=["GET", "POST"])
+@_admin_required
+def api_admin_settings():
+    if request.method == "GET":
+        return jsonify({"ok": True, "settings": KP.settings_get_all()})
+    d = request.get_json(silent=True) or {}
+    updated = KP.settings_set_many(d)
+    return jsonify({"ok": True, "settings": updated})
+
+
+# ---------------- 4. 用户反馈与工单管理 ----------------
+
+@app.route("/api/admin/feedback", methods=["GET"])
+@_admin_required
+def api_admin_feedback():
+    limit = int(request.args.get("limit", 50))
+    offset = int(request.args.get("offset", 0))
+    res = KP.feedback_list(limit=limit, offset=offset)
+    return jsonify({"ok": True, **res})
+
+
+@app.route("/api/admin/feedback/<int:fid>/status", methods=["POST"])
+@_admin_required
+def api_admin_feedback_status(fid):
+    d = request.get_json(silent=True) or {}
+    status = d.get("status", "resolved")
+    KP.feedback_status(fid, status=status)
+    return jsonify({"ok": True})
+
+
+@app.route("/api/admin/feedback/<int:fid>", methods=["DELETE"])
+@_admin_required
+def api_admin_feedback_delete(fid):
+    KP.feedback_delete(fid)
+    return jsonify({"ok": True})
 
 
 @app.route("/api/admin/cache/clear", methods=["POST"])
@@ -3119,7 +3295,7 @@ def api_admin_cache_clear():
 def api_admin_upstream_test():
     base = pick_base()
     t0 = time.time()
-    st, r = up_req("GET", "/v1/sites/home-address?host=kanju.ai", timeout=8)
+    st, r = up_req("GET", "/v1/sites/home-address?host=juchang8.com", timeout=8)
     lat = int((time.time() - t0) * 1000)
     return jsonify({
         "ok": True,
