@@ -107,9 +107,18 @@ DEFAULT_SETTINGS = {
 def _conn():
     c = sqlite3.connect(DB_PATH, timeout=30, check_same_thread=False)
     c.row_factory = sqlite3.Row
-    c.execute("PRAGMA journal_mode=WAL")
-    c.execute("PRAGMA busy_timeout=30000")
-    c.execute("PRAGMA synchronous=NORMAL")
+    try:
+        c.execute("PRAGMA journal_mode=WAL")
+    except Exception:
+        try:
+            c.execute("PRAGMA journal_mode=DELETE")
+        except Exception:
+            pass
+    try:
+        c.execute("PRAGMA busy_timeout=30000")
+        c.execute("PRAGMA synchronous=NORMAL")
+    except Exception:
+        pass
     return c
 
 

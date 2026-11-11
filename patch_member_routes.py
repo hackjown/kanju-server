@@ -1,22 +1,4 @@
-#!/usr/bin/env python3
-# -*- coding: utf-8 -*-
-"""把会员系统路由注入 app.py（幂等：已注入则跳过）"""
-import io, os, re, sys
-
-p = os.path.join(os.path.dirname(os.path.abspath(__file__)), "app.py")
-s = io.open(p, encoding="utf-8").read()
-
-MARK = "# ================= KANJU_MEMBER_ROUTES ================="
-if MARK in s:
-    print("SKIP: 已注入过")
-    sys.exit(0)
-
-ROUTES = r'''
-# ================= KANJU_MEMBER_ROUTES =================
-# 会员系统：注册 / 登录 / 登出 / 我 / 收藏 / 历史 / 18+ 偏好 / 午夜剧场
-import kanju_member as KM
-
-COOKIE = "kj_sid"
+# done
 
 
 def _sid():

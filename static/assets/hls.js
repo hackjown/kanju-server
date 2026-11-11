@@ -9,41 +9,41 @@
       http-equiv="Content-Security-Policy"
       content="default-src 'self'; script-src 'self' https:; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https:; font-src 'self' data: https:; connect-src 'self' https: wss:; media-src 'self' blob: https:; worker-src 'self' blob:; frame-src 'self' https:; manifest-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'; upgrade-insecure-requests"
     />
-    <meta name="application-name" content="看剧AI" />
+    <meta name="application-name" content="剧场吧AI" />
     <meta
       name="description"
-      content="看剧AI 影视搜索与内容发现工具，支持电影、电视剧、动漫、综艺片库浏览与智能推荐"
+      content="剧场吧AI 影视搜索与内容发现工具，支持电影、电视剧、动漫、综艺片库浏览与智能推荐"
     />
     <meta
       name="keywords"
-      content="看剧AI,KANJU.AI,AI影视搜索,影视搜索,电影搜索,电视剧搜索,动漫搜索,综艺搜索,影视内容发现,智能推荐,片库浏览"
+      content="剧场吧AI,JUCHANG8.COM,AI影视搜索,影视搜索,电影搜索,电视剧搜索,动漫搜索,综艺搜索,影视内容发现,智能推荐,片库浏览"
     />
     <meta name="robots" content="index,follow,max-image-preview:large" />
     <meta name="mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
-    <meta name="apple-mobile-web-app-title" content="看剧AI" />
+    <meta name="apple-mobile-web-app-title" content="剧场吧AI" />
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
     <link rel="manifest" href="/manifest.webmanifest?v=20260802-kanju-gold" />
     <link rel="icon" type="image/png" href="/assets/dianyingtiantang-icon.png?v=20260819-kanju" />
     <link rel="apple-touch-icon" href="/assets/app-icon-180.png?v=20260819-kanju" />
     <meta property="og:type" content="website" />
     <meta property="og:locale" content="zh_CN" />
-    <meta property="og:site_name" content="看剧AI" />
-    <meta property="og:title" content="看剧AI - KANJU.AI" />
+    <meta property="og:site_name" content="剧场吧AI" />
+    <meta property="og:title" content="剧场吧AI - JUCHANG8.COM" />
     <meta
       property="og:description"
-      content="看剧AI 影视搜索与内容发现工具，支持电影、电视剧、动漫、综艺片库浏览与智能推荐"
+      content="剧场吧AI 影视搜索与内容发现工具，支持电影、电视剧、动漫、综艺片库浏览与智能推荐"
     />
     <meta property="og:image" content="/assets/app-icon-512.png?v=20260819-kanju" />
-    <meta property="og:image:alt" content="看剧AI 应用图标" />
+    <meta property="og:image:alt" content="剧场吧AI 应用图标" />
     <meta name="twitter:card" content="summary" />
-    <meta name="twitter:title" content="看剧AI - KANJU.AI" />
+    <meta name="twitter:title" content="剧场吧AI - JUCHANG8.COM" />
     <meta
       name="twitter:description"
-      content="看剧AI 影视搜索与内容发现工具，支持电影、电视剧、动漫、综艺片库浏览与智能推荐"
+      content="剧场吧AI 影视搜索与内容发现工具，支持电影、电视剧、动漫、综艺片库浏览与智能推荐"
     />
     <meta name="twitter:image" content="/assets/app-icon-512.png?v=20260819-kanju" />
-    <title>看剧AI - KANJU.AI</title>
+    <title>剧场吧AI - JUCHANG8.COM</title>
     <script src="/app-bootstrap.js"></script>
     <script type="module" crossorigin src="/assets/main-3H4ZSkip.js"></script>
     <link rel="modulepreload" crossorigin href="/assets/vite-runtime-mxn4OsD4.js">

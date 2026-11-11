@@ -187,4 +187,65 @@
   } catch (e) {
     console.warn("Bootstrap storage initialization failed:", e);
   }
+
+  // ---------------- 3. 全局品牌与域名即时校正 (剧场吧AI · juchang8.com) ----------------
+  (function fixBrandText() {
+    function replaceBrandInNode(node) {
+      if (node.nodeType === 3) {
+        var txt = node.nodeValue;
+        if (txt && (txt.includes("看剧AI") || txt.includes("kanju.ai") || txt.includes("KANJU.AI"))) {
+          node.nodeValue = txt.replace(/看剧AI/g, "剧场吧AI").replace(/kanju\.ai/g, "juchang8.com").replace(/KANJU\.AI/g, "JUCHANG8.COM");
+        }
+      } else if (node.nodeType === 1) {
+        if (node.tagName === "A" && node.href && node.href.includes("kanju.ai")) {
+          node.href = node.href.replace(/kanju\.ai/g, "juchang8.com");
+        }
+        var children = node.childNodes;
+        for (var i = 0; i < children.length; i++) {
+          replaceBrandInNode(children[i]);
+        }
+      }
+    }
+
+    function sweep() {
+      if (document.title && (document.title.includes("看剧AI") || document.title.includes("kanju.ai") || document.title.includes("KANJU.AI"))) {
+        document.title = document.title.replace(/看剧AI/g, "剧场吧AI").replace(/kanju\.ai/g, "juchang8.com").replace(/KANJU\.AI/g, "JUCHANG8.COM");
+      }
+      if (document.body) {
+        replaceBrandInNode(document.body);
+      }
+    }
+
+    if (document.readyState === "loading") {
+      document.addEventListener("DOMContentLoaded", sweep);
+    } else {
+      sweep();
+    }
+
+    try {
+      var observer = new MutationObserver(function(mutations) {
+        for (var i = 0; i < mutations.length; i++) {
+          var m = mutations[i];
+          if (m.type === "childList") {
+            for (var j = 0; j < m.addedNodes.length; j++) {
+              replaceBrandInNode(m.addedNodes[j]);
+            }
+          } else if (m.type === "characterData") {
+            replaceBrandInNode(m.target);
+          }
+        }
+      });
+      observer.observe(document.documentElement, {
+        childList: true,
+        subtree: true,
+        characterData: true
+      });
+    } catch (e) {}
+
+    var count = 0;
+    var timer = setInterval(function() {
+      sweep();
+      if (++count > 25) clearInterval(timer);
+    }, 150);
+  })();
 })();
