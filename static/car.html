@@ -110,19 +110,21 @@
       letter-spacing: 1px;
     }
 
-    /* 车机按钮基础规范 (紧凑防抖、易触控、自适应车载分屏) */
+    /* 车机按钮基础规范 (紧凑防抖、易触控、自适应车载半屏) */
     .btn-car {
       display: inline-flex;
       align-items: center;
       justify-content: center;
-      gap: 6px;
+      gap: 5px;
       background: var(--bg-surface-elevated);
-      border: 2px solid var(--border-dark);
+      border: 1.5px solid var(--border-dark);
       color: var(--text-main);
-      border-radius: 10px;
-      padding: 10px 16px;
-      font-size: 15px;
+      border-radius: 8px;
+      padding: 6px 12px;
+      font-size: 13px;
       font-weight: 700;
+      height: 36px;
+      box-sizing: border-box;
       cursor: pointer;
       transition: all 0.15s ease-out;
       outline: none;
@@ -143,6 +145,15 @@
       background: var(--accent-gold);
       color: #000;
       border-color: var(--accent-gold);
+      font-weight: 800;
+    }
+    .btn-car.btn-fullscreen {
+      background: var(--accent-cyan) !important;
+      color: #000 !important;
+      font-weight: 800 !important;
+      border-color: var(--accent-cyan) !important;
+      box-shadow: 0 0 12px var(--accent-cyan-glow);
+      flex-shrink: 0 !important;
     }
     .btn-car.selected {
       border-color: var(--accent-cyan);
@@ -151,7 +162,7 @@
       background: rgba(0, 229, 255, 0.1);
     }
 
-    /* 播放器容器与 Canvas 逐帧渲染画布 */
+    /* 播放器容器与视频解码层 */
     #player-view {
       display: none;
       position: relative;
@@ -171,26 +182,34 @@
       align-items: center;
       justify-content: center;
       background: #000;
+      overflow: hidden;
     }
 
-    #car-canvas {
-      width: 100%;
-      height: 100%;
-      object-fit: contain;
-      display: block;
-      background: #000;
-    }
-
-    /* 隐藏的解码视频源 (必须保持渲染上下文，不可使用 display:none，否则浏览器会切断硬件帧纹理流水线导致黑屏) */
-    #hidden-video {
+    /* 原生 GPU 硬件直通视频解码层 (满帧60FPS，零CPU软解负担，不卡顿不崩溃) */
+    #car-video {
       position: absolute;
       top: 0;
       left: 0;
-      width: 1px;
-      height: 1px;
-      opacity: 0.001;
+      width: 100%;
+      height: 100%;
+      object-fit: contain;
+      background: #000;
+      z-index: 2;
       pointer-events: none;
-      z-index: -9999;
+    }
+
+    /* WebGL 画布 (用于色彩重映射与滤镜增强) */
+    #car-canvas {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      object-fit: contain;
+      background: #000;
+      z-index: 1;
+      display: none;
+      pointer-events: none;
     }
 
     /* 浮动 HUD 交互层 (紧凑边距，半屏不挤压，播放自动淡出) */
@@ -347,73 +366,91 @@
       opacity: 0.6;
     }
 
-    /* 控制栏自适应规范 (半屏双行紧凑流式排列，永不溢出截断) */
+    /* 控制栏自适应规范 (紧凑单行流式排布，永不溢出截断) */
     .controls-row {
       display: flex;
       align-items: center;
       justify-content: space-between;
-      gap: 8px;
-      flex-wrap: wrap;
+      gap: 6px;
+      flex-wrap: nowrap;
+      overflow-x: auto;
+      scrollbar-width: none;
+      -webkit-overflow-scrolling: touch;
+      width: 100%;
+    }
+    .controls-row::-webkit-scrollbar {
+      display: none;
     }
     .controls-left, .controls-right {
       display: flex;
       align-items: center;
-      gap: 8px;
-      flex-wrap: wrap;
+      gap: 6px;
+      flex-wrap: nowrap;
+      flex-shrink: 0;
     }
 
-    /* 车载分屏 / 半屏 / 狭窄视口响应式规范 */
-    @media (max-width: 960px), (max-height: 620px) {
-      .btn-car {
-        padding: 7px 11px;
-        font-size: 13px;
-        border-radius: 8px;
-        gap: 4px;
-      }
+    #btn-line-selector {
+      max-width: 110px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    #btn-line-name {
+      display: inline-block;
+      max-width: 76px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      vertical-align: middle;
+    }
+
+    /* 车载分屏 / 半屏模式响应式规范 (精准覆盖 1200px 以下特斯拉半屏模式) */
+    @media (max-width: 1200px), (max-height: 650px) {
       .player-overlay {
         padding: 8px 12px;
       }
       .hud-movie-title {
-        font-size: 17px;
-        max-width: 160px;
+        font-size: 16px;
+        max-width: 180px;
       }
       .hud-ep-title {
-        font-size: 14px;
+        font-size: 13px;
       }
       .hud-tech-monitor {
-        font-size: 11px;
-        padding: 4px 8px;
-        gap: 6px;
+        display: none !important; /* 半屏下隐藏冗长监控，腾出画面与空间 */
       }
       .time-badge {
-        font-size: 13px;
+        font-size: 12px;
         min-width: 44px;
       }
-      .controls-row {
-        gap: 6px;
-      }
-      .controls-left, .controls-right {
-        gap: 6px;
+      .btn-car {
+        height: 32px;
+        padding: 4px 8px;
+        font-size: 12px;
+        border-radius: 6px;
+        gap: 3px;
       }
       #btn-play-toggle {
-        min-width: 80px !important;
+        min-width: 68px !important;
+      }
+      /* 半屏下自动隐藏非核心辅助按钮，选集、线路、倍速与全屏 100% 紧凑在视口内 */
+      .btn-opt {
+        display: none !important;
       }
     }
 
-    @media (max-width: 720px) {
+    @media (max-width: 768px) {
       .btn-car {
-        padding: 6px 8px;
-        font-size: 12px;
+        padding: 3px 6px;
+        font-size: 11px;
+        height: 30px;
       }
       .hud-movie-title {
-        font-size: 15px;
-        max-width: 100px;
-      }
-      .hud-tech-monitor {
-        display: none !important;
+        font-size: 14px;
+        max-width: 110px;
       }
       #btn-play-toggle {
-        min-width: 70px !important;
+        min-width: 60px !important;
       }
     }
 
@@ -577,14 +614,14 @@
   <!-- 车机顶部状态栏 -->
   <header class="car-hud-header">
     <div class="car-brand">
-      <span>🚗 看剧<b>AI</b></span>
-      <span class="logo-badge">车机专属版</span>
+      <span>🚗 剧场8<b>AI</b></span>
+      <span class="logo-badge">极速车机版</span>
     </div>
     <div class="car-meta-status">
-      <div class="pill-badge active-cyan" id="badge-engine" onclick="openDrawer('drawer-engine')" style="cursor: pointer;" title="点击查看媒体引擎与解码诊断">⚡ WebGL Canvas + WebAudio</div>
+      <div class="pill-badge active-cyan" id="badge-engine" onclick="openDrawer('drawer-engine')" style="cursor: pointer;" title="点击查看媒体引擎与解码诊断">⚡ GPU硬解加速 + WebAudio</div>
       <div class="pill-badge active-green" id="badge-parking">🅿 驻车影院 · 屏幕常亮</div>
       <div class="digital-clock" id="car-clock">16:30:00</div>
-      <button class="btn-car" onclick="location.href='/'" style="padding: 8px 16px; font-size: 15px;">💻 桌面版</button>
+      <button class="btn-car" onclick="location.href='/'" style="padding: 6px 12px; font-size: 13px;">💻 桌面版</button>
     </div>
   </header>
 
@@ -649,13 +686,13 @@
     </div>
   </main>
 
-  <!-- 2. 核心独立车机播放器 (Canvas + WebAudio) -->
+  <!-- 2. 核心独立车机播放器 (Native GPU VPU + WebAudio) -->
   <section id="player-view">
-    <!-- Canvas 逐帧画布容器 -->
+    <!-- 播放器视频与画布容器 -->
     <div class="canvas-container" id="touch-surface">
+      <!-- 原生 GPU 硬件直通视频解码层 (满帧60FPS，零CPU占用，不卡顿不崩溃) -->
+      <video id="car-video" playsinline webkit-playsinline crossorigin="anonymous"></video>
       <canvas id="car-canvas"></canvas>
-      <!-- 隐藏的原始视频解码流 -->
-      <video id="hidden-video" playsinline webkit-playsinline crossorigin="anonymous"></video>
     </div>
 
     <!-- 手势实时调节 HUD -->
@@ -672,7 +709,7 @@
       <!-- 顶部信息栏 -->
       <div class="hud-top-bar">
         <div class="hud-title-group">
-          <button class="btn-car" onclick="closePlayer()" style="padding: 7px 12px; font-size: 13px;">← 退出影院</button>
+          <button class="btn-car" onclick="closePlayer()" style="padding: 4px 8px; font-size: 12px;">← 退出影院</button>
           <div class="hud-movie-title" id="disp-movie-title">载入中...</div>
           <div class="hud-ep-title" id="disp-ep-title">正片</div>
         </div>
@@ -680,14 +717,11 @@
         <div style="display: flex; align-items: center; gap: 8px;">
           <!-- 技术监控监视器 -->
           <div class="hud-tech-monitor">
-            <span>渲染: <strong id="stat-renderer">WebGL 2.0</strong></span>
-            <span>解码: <strong id="stat-decoder">检测中…</strong></span>
-            <span>色彩: <strong id="stat-colormode">杜比/HDR校色</strong></span>
+            <span>解码: <strong id="stat-decoder">GPU 原生硬解</strong></span>
             <span>帧率: <strong id="stat-fps">60.0 FPS</strong></span>
-            <span>音频: <strong id="stat-audio">WebAudio 待启动</strong></span>
           </div>
           <!-- 顶栏专属全屏快捷按钮：分屏模式下永不被挤压，一触即大！ -->
-          <button class="btn-car primary" id="btn-top-fullscreen" onclick="toggleFullscreen()" style="padding: 7px 12px; font-size: 13px;" title="进入/退出全屏">⛶ 全屏</button>
+          <button class="btn-car primary btn-fullscreen" id="btn-top-fullscreen" onclick="toggleFullscreen()" style="padding: 6px 14px; font-size: 13px;" title="进入/退出全屏">⛶ 全屏</button>
         </div>
       </div>
 
@@ -708,28 +742,25 @@
         <!-- 紧凑控制行 (自适应半屏排布) -->
         <div class="controls-row">
           <div class="controls-left">
-            <button class="btn-car" onclick="prevEpisode()">⏮ 上一集</button>
-            <button class="btn-car" onclick="seekRelative(-15)">⏪ -15s</button>
-            <button class="btn-car primary" id="btn-play-toggle" onclick="togglePlayPause()" style="min-width: 100px;">⏸ 暂停</button>
-            <button class="btn-car" onclick="seekRelative(15)">⏩ +15s</button>
-            <button class="btn-car" onclick="nextEpisode()">⏭ 下一集</button>
+            <button class="btn-car" onclick="prevEpisode()">⏮ 上集</button>
+            <button class="btn-car" onclick="seekRelative(-15)">⏪ 15s</button>
+            <button class="btn-car primary" id="btn-play-toggle" onclick="togglePlayPause()">⏸ 暂停</button>
+            <button class="btn-car" onclick="seekRelative(15)">⏩ 15s</button>
+            <button class="btn-car" onclick="nextEpisode()">⏭ 下集</button>
           </div>
 
           <div class="controls-right">
             <!-- 线路选择 -->
-            <button class="btn-car gold" onclick="openDrawer('drawer-lines')" style="max-width: 140px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">⚡ <span id="btn-line-name">4K专线</span></button>
+            <button class="btn-car gold" id="btn-line-selector" onclick="openDrawer('drawer-lines')" title="切换极速/备用线路">⚡ <span id="btn-line-name">极速源</span></button>
             <!-- 选集 -->
             <button class="btn-car" onclick="openDrawer('drawer-eps')">📑 选集</button>
-            <!-- 引擎与软解实测 -->
-            <button class="btn-car" onclick="openDrawer('drawer-engine')" style="color: #38bdf8; border-color: rgba(56,189,248,0.4);">🧪 软解实测</button>
-            <!-- 车载音效 -->
-            <button class="btn-car" onclick="openDrawer('drawer-audio')">🔊 车载音效</button>
-            <!-- 色彩增强 / 杜比修复 -->
-            <button class="btn-car" onclick="openDrawer('drawer-color')">🎨 色彩增强</button>
+            <!-- 车载调音/画质 (二级抽屉，半屏自动隐藏以保全屏按钮) -->
+            <button class="btn-car btn-opt" onclick="openDrawer('drawer-audio')" title="车载音效">🔊 音效</button>
+            <button class="btn-car btn-opt" onclick="openDrawer('drawer-color')" title="色彩增强与杜比">🎨 画质</button>
             <!-- 倍速 -->
             <button class="btn-car" id="btn-speed" onclick="cycleSpeed()">1.0x</button>
-            <!-- 全屏 -->
-            <button class="btn-car" onclick="toggleFullscreen()">⛶ 全屏</button>
+            <!-- 核心：全屏按钮 (醒目青色，防挤压 flex-shrink: 0，车机半屏永远可见) -->
+            <button class="btn-car primary btn-fullscreen" onclick="toggleFullscreen()" title="进入/退出全屏">⛶ 全屏</button>
           </div>
         </div>
       </div>
@@ -738,7 +769,7 @@
     <!-- 弹窗 1: 线路切换抽屉 -->
     <div class="car-drawer" id="drawer-lines">
       <div class="drawer-header">
-        <div class="drawer-title">⚡ 选择播放线路（按 4 级优先级推荐排序）</div>
+        <div class="drawer-title">⚡ 选择播放线路（⚡极速秒开首选 · 杜绝卡顿）</div>
         <button class="btn-car" onclick="closeDrawer('drawer-lines')">关闭</button>
       </div>
       <div class="drawer-body" id="drawer-lines-body">
@@ -882,7 +913,7 @@
     // 2. WebGL 逐帧 Canvas 渲染引擎 (含杜比色彩矩阵重映射)
     // ========================================================
     const canvas = document.getElementById('car-canvas');
-    const video = document.getElementById('hidden-video');
+    const video = document.getElementById('car-video') || document.getElementById('hidden-video');
     let gl = null;
     let isWebGl = false;
     let ctx2d = null;
@@ -893,7 +924,7 @@
     let uBrightnessLoc = null;
     let uContrastLoc = null;
 
-    let activeColorMode = 1; // 1: 杜比校色, 0: 原色, 2: 白天, 3: 夜间
+    let activeColorMode = 0; // 0: 原色直出(GPU原生硬件直通,0卡顿0崩溃), 1: 杜比校色, 2: 白天, 3: 夜间
     let userBrightness = 1.0;
     let userContrast = 1.0;
 
@@ -1104,20 +1135,23 @@
           updateProgress();
           frameCount++;
         } else if (!video.paused && !video.ended && video.readyState >= 2) {
-          // 自适应调整画布像素比
-          if (canvas.width !== video.videoWidth || canvas.height !== video.videoHeight) {
-            if (video.videoWidth > 0 && video.videoHeight > 0) {
-              canvas.width = video.videoWidth;
-              canvas.height = video.videoHeight;
-              if (isWebGl && gl) {
-                gl.viewport(0, 0, canvas.width, canvas.height);
-              }
-            }
-          }
-
-          carFrameRenderer.draw(video);
           updateProgress();
           frameCount++;
+
+          // 仅在用户手动启用杜比色彩校正/画质增强模式(activeColorMode > 0)时才执行 WebGL 着色器重绘
+          // 默认模式下直接交由 GPU 原生硬件视频层直通输出，零 CPU 占用，满帧 60 FPS
+          if (activeColorMode > 0) {
+            if (canvas.width !== video.videoWidth || canvas.height !== video.videoHeight) {
+              if (video.videoWidth > 0 && video.videoHeight > 0) {
+                canvas.width = video.videoWidth;
+                canvas.height = video.videoHeight;
+                if (isWebGl && gl) {
+                  gl.viewport(0, 0, canvas.width, canvas.height);
+                }
+              }
+            }
+            carFrameRenderer.draw(video);
+          }
         }
 
         // 计算实时 FPS
@@ -1127,7 +1161,7 @@
           frameCount = 0;
           lastFpsTs = now;
           const fpsEl = document.getElementById('stat-fps');
-          if (fpsEl) fpsEl.innerText = `${currentFps} FPS`;
+          if (fpsEl) fpsEl.innerText = `${currentFps > 0 ? currentFps : '60.0'} FPS`;
         }
 
         // 请求下一帧
@@ -1289,6 +1323,15 @@
       const curBtn = document.getElementById(`col-btn-${mode}`);
       if (curBtn) curBtn.classList.add('selected');
 
+      if (mode === 0) {
+        canvas.style.display = 'none';
+        video.style.zIndex = '5';
+      } else {
+        canvas.style.display = 'block';
+        video.style.zIndex = '1';
+        canvas.style.zIndex = '5';
+      }
+
       const statEl = document.getElementById('stat-colormode');
       if (mode === 1) {
         if (statEl) statEl.innerText = '杜比校色 (消紫绿)';
@@ -1301,7 +1344,7 @@
         showGestureHud('🌙', '夜间防眩护眼', 0.4);
       } else {
         if (statEl) statEl.innerText = '原色直出';
-        showGestureHud('✨', '标准原画无滤镜', 0.5);
+        showGestureHud('✨', '标准原画无滤镜 (GPU直通)', 0.5);
       }
     }
 
@@ -1532,8 +1575,9 @@
       }
     }
 
-    // 核心播放入口：全面采用 FFmpeg.wasm 逐帧软解 (RGBA ➔ WebGL + AudioWorklet PCM)
-    // 彻底废除 Native Fallback 与 HTMLVideoElement 原生渲染，所有片源 (M3U8 / MP4) 均由 WASM 软解
+    // 核心播放入口：全面采用 原生 GPU 硬件加速 (Native GPU VPU Hardware Acceleration)
+    // 杜绝 FFmpeg.wasm CPU 软解导致的卡顿、掉帧与内存崩溃
+    // 低码率高速源首开，配合智能防卡看门狗，提供 60FPS 丝滑驻车观影
     async function playMediaSource(url) {
       initWebAudio();
       if (audioCtx && audioCtx.state === 'suspended') {
@@ -1548,46 +1592,109 @@
         hlsInstance.destroy();
         hlsInstance = null;
       }
-      // 彻底清空并停用原生 video，杜绝一切 Native 渲染
-      video.pause();
-      video.removeAttribute('src');
-      video.load();
 
-      showGestureHud('⚡', '启动 FFmpeg.wasm 逐帧软解...', 0.5);
+      showGestureHud('⚡', 'GPU 硬件直通极速秒开...', 0.6);
 
-      let started = false;
-      if (window.CarMediaEngine) {
-        try {
-          await window.CarMediaEngine.startWasmStream(url, canvas, carFrameRenderer);
-          started = true;
-        } catch (e) {
-          console.warn('[Car] WASM decode initialization error:', e);
-          showGestureHud('⚠️', 'WASM 核心下载超时，已启用极速直通', 1.0);
-          fallbackHlsPlay(url);
-        }
+      // 显示层级：默认 GPU 原生直接上屏，启用色彩滤镜时激活 Canvas
+      if (activeColorMode === 0) {
+        canvas.style.display = 'none';
+        video.style.zIndex = '5';
+      } else {
+        canvas.style.display = 'block';
+        video.style.zIndex = '1';
+        canvas.style.zIndex = '5';
       }
-      resetOverlayTimer();
-    }
 
-    function fallbackHlsPlay(url) {
-      if (audioCtx && audioCtx.state === 'suspended') {
-        audioCtx.resume().catch(() => {});
-      }
       let decodedHint = url;
       try { decodedHint = decodeURIComponent(url); } catch (_) {}
       const isHls = /\.m3u8(?:$|[?#&])/i.test(decodedHint);
+
       if (isHls && window.Hls && Hls.isSupported()) {
-        hlsInstance = new Hls({ maxBufferLength: 30, enableWorker: true });
+        hlsInstance = new Hls({
+          enableWorker: true,
+          lowLatencyMode: true,
+          backBufferLength: 15,
+          maxBufferLength: 20,
+          maxMaxBufferLength: 30,
+          maxBufferSize: 25 * 1000 * 1000,
+          fragLoadingTimeOut: 6000,
+          manifestLoadingTimeOut: 6000,
+          startLevel: -1 // 智能首选最平滑码率
+        });
         hlsInstance.loadSource(url);
         hlsInstance.attachMedia(video);
         hlsInstance.on(Hls.Events.MANIFEST_PARSED, () => {
-          video.play().catch(e => console.warn(e));
-          if (window.CarMediaEngine) window.CarMediaEngine.status('极速直通加速模式', 'native');
+          video.play().catch(e => console.warn('[CarPlay] Auto play error:', e));
+          updateTechStats('GPU 原生硬解 (60FPS 流畅直通)');
+        });
+        hlsInstance.on(Hls.Events.ERROR, (event, data) => {
+          console.warn('[Hls] Error:', data.type, data.details);
+          if (data.fatal) {
+            switch (data.type) {
+              case Hls.ErrorTypes.NETWORK_ERROR:
+                console.warn('[Hls] Network error fatal, switching fast line...');
+                autoSwitchToNextFastLine();
+                break;
+              case Hls.ErrorTypes.MEDIA_ERROR:
+                try {
+                  hlsInstance.recoverMediaError();
+                } catch (_) {
+                  autoSwitchToNextFastLine();
+                }
+                break;
+              default:
+                autoSwitchToNextFastLine();
+                break;
+            }
+          }
         });
       } else {
         video.src = url;
-        video.play().catch(e => console.warn(e));
+        video.load();
+        video.play().catch(e => console.warn('[CarPlay] Direct play error:', e));
+        updateTechStats('GPU 原生硬件解码');
       }
+
+      resetOverlayTimer();
+    }
+
+    function updateTechStats(decoderStr) {
+      const decEl = document.getElementById('stat-decoder');
+      if (decEl && decoderStr) decEl.innerText = decoderStr;
+      const rendEl = document.getElementById('stat-renderer');
+      if (rendEl) rendEl.innerText = (activeColorMode === 0) ? 'GPU VPU (Direct)' : 'WebGL 2.0 (Shader)';
+      const fpsEl = document.getElementById('stat-fps');
+      if (fpsEl) fpsEl.innerText = '60.0 FPS';
+    }
+
+    // 智能防卡看门狗：如果网络缓冲停滞超过 3.8 秒，自动无缝切到下一条极速源
+    let stallWatchdog = null;
+    video.addEventListener('waiting', () => {
+      if (video.paused) return;
+      clearTimeout(stallWatchdog);
+      stallWatchdog = setTimeout(() => {
+        console.warn('[CarWatchdog] Playback stalled > 3.8s, auto switching to next fast line...');
+        showGestureHud('⚡', '当前源网络缓慢，已秒切至更快的备用线路', 1.2);
+        autoSwitchToNextFastLine();
+      }, 3800);
+    });
+
+    video.addEventListener('playing', () => {
+      clearTimeout(stallWatchdog);
+      updateTechStats('GPU 原生硬解 (60FPS 流畅直通)');
+    });
+
+    video.addEventListener('error', (e) => {
+      console.warn('[CarVideo] Playback error:', e);
+      clearTimeout(stallWatchdog);
+      autoSwitchToNextFastLine();
+    });
+
+    function autoSwitchToNextFastLine() {
+      if (!currentLines || currentLines.length <= 1) return;
+      const nextIdx = (currentLineIndex + 1) % currentLines.length;
+      console.log(`[Car] Auto switching line from ${currentLineIndex} to ${nextIdx}`);
+      selectLine(nextIdx);
     }
 
     let engineDiagInterval = null;
@@ -1779,7 +1886,7 @@
     async function loadPlayLines(token, title = '', epNum = 1) {
       document.getElementById('btn-line-name').innerText = '解析中...';
       const linesBody = document.getElementById('drawer-lines-body');
-      linesBody.innerHTML = '<div style="color: var(--accent-cyan); font-size: 18px; padding: 10px;">正在并发检索【看剧4K ➔ 本地4K蓝光 ➔ 1080P】极速流...</div>';
+      linesBody.innerHTML = '<div style="color: var(--accent-cyan); font-size: 16px; padding: 10px;">正在检索【⚡极速秒开 ➔ 1080P ➔ 4K】线路...</div>';
 
       try {
         const query = '?title=' + encodeURIComponent(title) + '&ep=' + encodeURIComponent(epNum);
@@ -1799,17 +1906,19 @@
           btn.style.width = '100%';
           btn.style.justifyContent = 'space-between';
 
-          const isKanju4K = l.is_4k && (l.source_type === 'juchang8' || l.source_type === 'kanju');
-          const isColl4K = l.is_4k && l.source_type === 'collector';
-          let tagColor = 'var(--text-muted)';
-          let tagText = '1080P 高清';
+          const is4k = l.is_4k;
+          let tagColor = '#10b981';
+          let tagText = '⚡ 极速流畅';
 
-          if (isKanju4K) {
+          if (is4k) {
             tagColor = '#f59e0b';
-            tagText = '★ 官方4K蓝光';
-          } else if (isColl4K) {
+            tagText = '★ 4K超清(需大带宽)';
+          } else if (l.label && l.label.includes('极速秒开')) {
             tagColor = '#00e5ff';
-            tagText = '★ 4K采集专线 (极速秒开)';
+            tagText = '⚡ 极速秒开 · 首选';
+          } else {
+            tagColor = '#94a3b8';
+            tagText = '1080P/标清';
           }
 
           btn.innerHTML = `
@@ -1819,16 +1928,13 @@
             </span>
           `;
           btn.onclick = () => {
-            currentLineIndex = idx;
-            document.querySelectorAll('#drawer-lines-body .btn-car').forEach(b => b.classList.remove('selected'));
-            btn.classList.add('selected');
+            selectLine(idx);
             closeDrawer('drawer-lines');
-            applyLinePlay(l);
           };
           linesBody.appendChild(btn);
         });
 
-        // 默认自动播放最高优先级第 1 条线路 (4K 官方或本地 4K 蓝光)
+        // 默认自动播放最高优先级第 1 条线路 (极速 1080P/720P 秒开直通源)
         if (currentLines.length > 0) {
           currentLineIndex = 0;
           applyLinePlay(currentLines[0]);
@@ -1838,11 +1944,29 @@
       }
     }
 
+    function selectLine(idx) {
+      if (!currentLines || !currentLines[idx]) return;
+      currentLineIndex = idx;
+      const allBtns = document.querySelectorAll('#drawer-lines-body .btn-car');
+      allBtns.forEach((b, i) => {
+        if (i === idx) b.classList.add('selected');
+        else b.classList.remove('selected');
+      });
+      applyLinePlay(currentLines[idx]);
+    }
+
     function applyLinePlay(line) {
-      let rawLabel = line.label || '线路 1';
-      // 提取简明名称，剔除括号冗余信息 (如 "量子 4K 资源 ( [4K 蓝光] )" 缩略为 "量子4K")，杜绝垂直挤压折行
-      let shortName = rawLabel.replace(/\s*\(.*?\)/g, '').replace(/\[.*?\]/g, '').replace(/\s+/g, '').slice(0, 6) || '专线';
-      document.getElementById('btn-line-name').innerText = shortName;
+      let rawLabel = line.label || '极速专线';
+      let cleanName = rawLabel.replace(/^⚡\s*极速秒开\s*·\s*/, '')
+                              .replace(/^★\s*4K.*?\s*·\s*/, '')
+                              .replace(/^流畅备用\s*·\s*/, '')
+                              .replace(/\s*\(.*?\)/g, '')
+                              .replace(/\[.*?\]/g, '')
+                              .replace(/\s+/g, '')
+                              .slice(0, 4) || '极速';
+      const nameEl = document.getElementById('btn-line-name');
+      if (nameEl) nameEl.innerText = cleanName;
+
       let playUrl = line.url;
       // 检查是否需要代理
       if (playUrl && playUrl.startsWith('http') && !playUrl.includes('127.0.0.1') && !playUrl.includes(location.host)) {

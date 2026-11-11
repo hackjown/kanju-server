@@ -526,8 +526,11 @@ def api_car_play(token):
                 except Exception:
                     pass
 
+        if not real_url:
+            continue
+
         item = {
-            "label": f"★ 剧场8官方4K · {lbl}" if is4k else f"剧场8 · {lbl}",
+            "label": f"★ 4K超清(需大带宽) · {lbl}" if is4k else f"⚡ 极速秒开 · {lbl}",
             "kind": "hls" if ".m3u8" in real_url else kind,
             "url": real_url,
             "is_4k": is4k,
@@ -550,9 +553,10 @@ def api_car_play(token):
                 if not u:
                     continue
                 lbl = cl.get("label") or "采集线路"
-                is4k = bool(cl.get("is_4k"))
+                is4k = bool(cl.get("is_4k")) or _is4k(lbl)
+                is_fast = any(k in lbl for k in ("极速", "非凡", "量子", "暴风", "天空", "秒开", "快播"))
                 c_item = {
-                    "label": lbl,
+                    "label": f"★ 4K超清(需大带宽) · {lbl}" if is4k else (f"⚡ 极速秒开 · {lbl}" if is_fast else f"流畅备用 · {lbl}"),
                     "kind": "hls" if ".m3u8" in u else "mp4",
                     "url": u,
                     "is_4k": is4k,
@@ -565,19 +569,30 @@ def api_car_play(token):
         except Exception as e:
             print(f"[CarPlay] Collector lines error: {e}")
 
-    # 3. 车机专属严格排序：
-    # 梯队 1: 剧场8 4K 官方源
-    # 梯队 2: 本地 4K 采集源 (暴风4K, 非凡4K, 量子4K, 天空4K)
-    # 梯队 3: 1080P 普通线路 (剧场8 1080P + 本地 1080P)
-    final_lines = []
-    for l in juchang8_4k_lines:
-        if l.get("url"): final_lines.append(l)
+    # 3. 车机专属极速优先排序（不考虑清晰度，速度快优先播放，杜绝卡顿）：
+    # 梯队 1: 极速秒开线路（剧场8 官方1080P/720P + 采集源极速 1080P，码率适中秒开首选）
+    # 梯队 2: 流畅备用线路
+    # 梯队 3: 4K 超清专线（排在列表最末尾，供用户连接车库Wi-Fi时手动点选，决不作为默认源）
+    fast_lines = []
+    normal_lines = []
+    bitrate_4k_lines = []
 
-    for l in collector_4k_lines:
-        if l.get("url"): final_lines.append(l)
+    for l in juchang8_normal_lines:
+        if l.get("url"):
+            fast_lines.append(l)
 
-    for l in (juchang8_normal_lines + collector_normal_lines):
-        if l.get("url"): final_lines.append(l)
+    for l in collector_normal_lines:
+        if l.get("url"):
+            if "⚡ 极速秒开" in l.get("label", ""):
+                fast_lines.append(l)
+            else:
+                normal_lines.append(l)
+
+    for l in (juchang8_4k_lines + collector_4k_lines):
+        if l.get("url"):
+            bitrate_4k_lines.append(l)
+
+    final_lines = fast_lines + normal_lines + bitrate_4k_lines
 
     return jsonify({
         "ok": True,
