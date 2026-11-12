@@ -552,6 +552,9 @@ def api_car_play(token):
                 u = cl.get("url") or ""
                 if not u:
                     continue
+                # 自动规整网页跳转层，直接获取真实 m3u8 直链
+                if ("/play/" in u or "/share/" in u) and not (".m3u8" in u or ".mp4" in u):
+                    u = u.rstrip("/") + "/index.m3u8"
                 lbl = cl.get("label") or "采集线路"
                 is4k = bool(cl.get("is_4k")) or _is4k(lbl)
                 is_fast = any(k in lbl for k in ("极速", "非凡", "量子", "暴风", "天空", "秒开", "快播"))
@@ -592,7 +595,14 @@ def api_car_play(token):
         if l.get("url"):
             bitrate_4k_lines.append(l)
 
-    final_lines = fast_lines + normal_lines + bitrate_4k_lines
+    raw_final = fast_lines + normal_lines + bitrate_4k_lines
+    seen_urls = set()
+    final_lines = []
+    for item in raw_final:
+        u = item.get("url")
+        if u and u not in seen_urls:
+            seen_urls.add(u)
+            final_lines.append(item)
 
     return jsonify({
         "ok": True,

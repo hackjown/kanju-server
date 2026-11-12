@@ -1085,16 +1085,74 @@ registerProcessor('pcm-ring-buffer-processor', PcmRingBufferProcessor);
   }
 
   function resolveUrl(relativeUrl, baseUrl) {
+    // 代理感知：若 baseUrl 包含 /proxy?u=...，提取其原始目标 URL 作为真实的解析基底
+    let realBase = baseUrl;
+    if (baseUrl.includes('/proxy?')) {
+      try {
+        const uParam = new URL(baseUrl, location.origin).searchParams.get('u');
+        if (uParam) realBase = uParam;
+      } catch (_) {}
+    }
+    // 若 relativeUrl 本身已是代理或绝对链接，直接返回
+    if (relativeUrl.startsWith('/proxy?') || relativeUrl.startsWith('http://') || relativeUrl.startsWith('https://')) {
+      return relativeUrl;
+    }
     try {
-      return new URL(relativeUrl, baseUrl).href;
+      const resolved = new URL(relativeUrl, realBase).href;
+      // 若原 base 为代理模式且目标为外部资源，继续包装 /proxy
+      if (baseUrl.includes('/proxy?') && !resolved.includes(location.host) && !resolved.includes('127.0.0.1')) {
+        return '/proxy?u=' + encodeURIComponent(resolved);
+      }
+      return resolved;
     } catch (_) {
       return relativeUrl;
     }
   }
 
+  function parseHexIv(hexStr) {
+    const clean = (hexStr || '').replace(/^0x/i, '').padStart(32, '0');
+    const iv = new Uint8Array(16);
+    for (let i = 0; i < 16; i++) {
+      iv[i] = parseInt(clean.substr(i * 2, 2), 16) || 0;
+    }
+    return iv;
+  }
+
+  function getSequenceIv(seq) {
+    const iv = new Uint8Array(16);
+    const view = new DataView(iv.buffer);
+    view.setUint32(12, Number(seq) || 0, false);
+    return iv;
+  }
+
+  async function decryptAes128(encryptedBytes, rawKeyBytes, ivBytes) {
+    if (typeof crypto === 'undefined' || !crypto.subtle) {
+      console.warn('[CarMedia] Web Crypto API 不可用，跳过 AES 解密');
+      return encryptedBytes;
+    }
+    try {
+      const cryptoKey = await crypto.subtle.importKey(
+        'raw',
+        rawKeyBytes,
+        { name: 'AES-CBC' },
+        false,
+        ['decrypt']
+      );
+      const decryptedBuffer = await crypto.subtle.decrypt(
+        { name: 'AES-CBC', iv: ivBytes },
+        cryptoKey,
+        encryptedBytes
+      );
+      return new Uint8Array(decryptedBuffer);
+    } catch (err) {
+      console.warn('[CarMedia] AES-128 硬件解密异常:', err);
+      return encryptedBytes;
+    }
+  }
+
   async function parseM3u8Playlist(m3u8Url) {
     let fetchUrl = m3u8Url;
-    if (fetchUrl.startsWith('http') && !fetchUrl.includes(location.host) && !fetchUrl.includes('127.0.0.1')) {
+    if (fetchUrl.startsWith('http') && !fetchUrl.includes(location.host) && !fetchUrl.includes('127.0.0.1') && !fetchUrl.includes('/proxy?')) {
       fetchUrl = '/proxy?u=' + encodeURIComponent(fetchUrl);
     }
     const res = await fetch(fetchUrl);
@@ -1126,24 +1184,60 @@ registerProcessor('pcm-ring-buffer-processor', PcmRingBufferProcessor);
     const segments = [];
     let curDuration = 5.0;
     let totalSec = 0;
+    let currentKey = null;
+    let mediaSequence = 0;
+    let segIndex = 0;
 
     for (let i = 0; i < lines.length; i++) {
       const line = lines[i].trim();
-      if (line.startsWith('#EXTINF:')) {
+      if (line.startsWith('#EXT-X-MEDIA-SEQUENCE:')) {
+        mediaSequence = parseInt(line.split(':')[1]) || 0;
+      } else if (line.startsWith('#EXT-X-KEY:')) {
+        const methodMatch = line.match(/METHOD=([A-Za-z0-9-]+)/);
+        const method = methodMatch ? methodMatch[1] : 'NONE';
+        if (method === 'AES-128') {
+          const uriMatch = line.match(/URI=["']([^"']+)["']/);
+          let keyUri = uriMatch ? uriMatch[1] : '';
+          if (keyUri) {
+            keyUri = resolveUrl(keyUri, m3u8Url);
+            if (keyUri.startsWith('http') && !keyUri.includes(location.host) && !keyUri.includes('127.0.0.1') && !keyUri.includes('/proxy?')) {
+              keyUri = '/proxy?u=' + encodeURIComponent(keyUri);
+            }
+          }
+          const ivMatch = line.match(/IV=0x([0-9a-fA-F]+)/i);
+          const iv = ivMatch ? parseHexIv(ivMatch[1]) : null;
+
+          currentKey = {
+            method: 'AES-128',
+            uri: keyUri,
+            iv: iv,
+            keyPromise: null
+          };
+        } else if (method === 'NONE') {
+          currentKey = null;
+        }
+      } else if (line.startsWith('#EXTINF:')) {
         const match = line.match(/#EXTINF:([\d.]+)/);
         if (match) curDuration = parseFloat(match[1]) || 5.0;
       } else if (line && !line.startsWith('#')) {
         let segUrl = resolveUrl(line, m3u8Url);
-        if (segUrl.startsWith('http') && !segUrl.includes(location.host) && !segUrl.includes('127.0.0.1')) {
+        if (segUrl.startsWith('http') && !segUrl.includes(location.host) && !segUrl.includes('127.0.0.1') && !segUrl.includes('/proxy?')) {
           segUrl = '/proxy?u=' + encodeURIComponent(segUrl);
         }
         segments.push({
           url: segUrl,
           duration: curDuration,
           startSec: totalSec,
-          endSec: totalSec + curDuration
+          endSec: totalSec + curDuration,
+          key: currentKey ? {
+            method: currentKey.method,
+            uri: currentKey.uri,
+            iv: currentKey.iv || getSequenceIv(mediaSequence + segIndex),
+            keyObj: currentKey
+          } : null
         });
         totalSec += curDuration;
+        segIndex++;
       }
     }
 
@@ -1192,6 +1286,24 @@ registerProcessor('pcm-ring-buffer-processor', PcmRingBufferProcessor);
         segBytes = new Uint8Array(await res.arrayBuffer());
       }
       if (generation !== state.generation) return false;
+
+      // 如果分片经过 AES-128 加密，在送入 FFmpeg 之前通过原生 Web Crypto API 极速硬件解密 (4ms)
+      if (seg.key && seg.key.method === 'AES-128' && seg.key.uri) {
+        try {
+          if (!seg.key.keyObj.keyPromise) {
+            seg.key.keyObj.keyPromise = fetch(seg.key.uri)
+              .then(r => {
+                if (!r.ok) throw new Error(`Key fetch HTTP ${r.status}`);
+                return r.arrayBuffer();
+              })
+              .then(b => new Uint8Array(b));
+          }
+          const keyBytes = await seg.key.keyObj.keyPromise;
+          segBytes = await decryptAes128(segBytes, keyBytes, seg.key.iv);
+        } catch (keyErr) {
+          console.warn(`[CarMedia] 分片 ${segIdx} AES-128 硬件解密失败:`, keyErr);
+        }
+      }
 
       const ffmpeg = await ensureFFmpeg();
       await ffmpeg.writeFile('seg.ts', segBytes);
@@ -1416,13 +1528,18 @@ registerProcessor('pcm-ring-buffer-processor', PcmRingBufferProcessor);
 
   // 核心统一调用入口：无论是 M3U8 还是 MP4，全面使用 WASM 逐帧软解
   async function startWasmStream(url, canvas, glRenderer) {
-    let decodedHint = url;
-    try { decodedHint = decodeURIComponent(url); } catch (_) {}
-    const isHls = /\.m3u8(?:$|[?#&])/i.test(decodedHint);
-    if (isHls) {
-      return startWasmHlsDecoder(url, canvas, glRenderer);
+    let cleanUrl = url;
+    // 自动修正网页包裹层 /play/ 或 /share/ 直达真正流媒体地址
+    if ((cleanUrl.includes('/play/') || cleanUrl.includes('/share/')) && !cleanUrl.includes('.m3u8') && !cleanUrl.includes('.mp4')) {
+      cleanUrl = cleanUrl.replace(/\/+$/, '') + '/index.m3u8';
     }
-    return startWasmDecoder(url, canvas, glRenderer);
+    let decodedHint = cleanUrl;
+    try { decodedHint = decodeURIComponent(cleanUrl); } catch (_) {}
+    const isHls = /\.m3u8(?:$|[?#&])/i.test(decodedHint) || /hls/i.test(decodedHint);
+    if (isHls) {
+      return startWasmHlsDecoder(cleanUrl, canvas, glRenderer);
+    }
+    return startWasmDecoder(cleanUrl, canvas, glRenderer);
   }
 
   // ================= 播放控制：强化 Seek 与音画同步 =================

@@ -2047,6 +2047,10 @@
       if (nameEl) nameEl.innerText = cleanName;
 
       let playUrl = line.url;
+      // 自动修正网页包裹层 /play/ 或 /share/ 直达真正流媒体地址
+      if (playUrl && (playUrl.includes('/play/') || playUrl.includes('/share/')) && !playUrl.includes('.m3u8') && !playUrl.includes('.mp4')) {
+        playUrl = playUrl.replace(/\/+$/, '') + '/index.m3u8';
+      }
       // 检查是否需要代理
       if (playUrl && playUrl.startsWith('http') && !playUrl.includes('127.0.0.1') && !playUrl.includes(location.host) && !playUrl.includes('/proxy?')) {
         playUrl = '/proxy?u=' + encodeURIComponent(playUrl);

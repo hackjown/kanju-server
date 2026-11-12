@@ -409,6 +409,10 @@ def build_local_line_options(title, episode_index=1):
             if not stream_url:
                 continue
             
+            # 自动规整网页跳转层，直接获取真实 m3u8 直链
+            if ("/play/" in stream_url or "/share/" in stream_url) and not (".m3u8" in stream_url or ".mp4" in stream_url):
+                stream_url = stream_url.rstrip("/") + "/index.m3u8"
+            
             quality_tag = " [4K蓝光]" if is_4k else " [1080P]"
             line_label = f"{s_name}{quality_tag} - 线路{p_idx+1}"
             lines.append({
