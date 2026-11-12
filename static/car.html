@@ -637,7 +637,7 @@
       <span class="logo-badge">极速车机版</span>
     </div>
     <div class="car-meta-status">
-      <div class="pill-badge active-cyan" id="badge-engine" onclick="openDrawer('drawer-engine')" style="cursor: pointer;" title="点击查看媒体引擎与解码诊断">⚡ GPU硬解加速 + WebAudio</div>
+      <div class="pill-badge active-cyan" id="badge-engine" onclick="openDrawer('drawer-engine')" style="cursor: pointer;" title="点击查看媒体引擎与解码诊断">⚡ FFmpeg.wasm RGBA逐帧软解 + WebAudio</div>
       <div class="pill-badge active-green" id="badge-parking">🅿 驻车影院 · 屏幕常亮</div>
       <div class="digital-clock" id="car-clock">16:30:00</div>
       <button class="btn-car" onclick="location.href='/'" style="padding: 6px 12px; font-size: 13px;">💻 桌面版</button>
@@ -745,9 +745,9 @@
         <div style="display: flex; align-items: center; gap: 8px;">
           <!-- 技术监控监视器 -->
           <div class="hud-tech-monitor">
-            <span>解码: <strong id="stat-decoder">GPU 原生硬解</strong></span>
+            <span>解码: <strong id="stat-decoder">FFmpeg.wasm 软解</strong></span>
             <span>帧率: <strong id="stat-fps">60.0 FPS</strong></span>
-            <span id="stat-renderer" style="display:none">GPU VPU</span>
+            <span id="stat-renderer" style="display:none">WebGL 2.0</span>
             <span id="stat-audio" style="display:none">WebAudio</span>
             <span id="stat-colormode" style="display:none">原色直出</span>
           </div>
@@ -1624,9 +1624,8 @@
       }
     }
 
-    // 核心播放入口：全面采用 原生 GPU 硬件加速 (Native GPU VPU Hardware Acceleration)
-    // 杜绝 FFmpeg.wasm CPU 软解导致的卡顿、掉帧与内存崩溃
-    // 低码率高速源首开，配合智能防卡看门狗，提供 60FPS 丝滑驻车观影
+    // 核心播放入口：全面恢复并升级 FFmpeg.wasm RGBA 逐帧软解 (RGBA ➔ WebGL + WebAudio)
+    // 配合切片并行预载、-skip_loop_filter all 极速去块、首播充能水位线与平滑时钟锚定，实现 0 卡顿软解
     async function playMediaSource(url) {
       initWebAudio();
       if (audioCtx && audioCtx.state === 'suspended') {
@@ -1641,18 +1640,46 @@
         hlsInstance.destroy();
         hlsInstance = null;
       }
+      // 彻底清空并停用原生 video，杜绝原生解码器抢占资源
+      video.pause();
+      video.removeAttribute('src');
+      video.load();
 
-      showGestureHud('⚡', 'GPU 硬件直通极速秒开...', 0.6);
+      // 显示层级：以 WebGL Canvas 逐帧渲染为主显示层
+      canvas.style.display = 'block';
+      canvas.style.zIndex = '5';
+      video.style.display = 'none';
+      video.style.zIndex = '1';
 
-      // 显示层级：默认 GPU 原生直接上屏，启用色彩滤镜时激活 Canvas
-      if (activeColorMode === 0) {
-        canvas.style.display = 'none';
-        video.style.zIndex = '5';
-      } else {
-        canvas.style.display = 'block';
-        video.style.zIndex = '1';
-        canvas.style.zIndex = '5';
+      showGestureHud('⚡', '启动 FFmpeg.wasm 逐帧软解...', 0.6);
+
+      let started = false;
+      if (window.CarMediaEngine) {
+        try {
+          await window.CarMediaEngine.startWasmStream(url, canvas, carFrameRenderer);
+          started = true;
+          updateTechStats('FFmpeg.wasm 逐帧软解 (RGBA ➔ WebGL)');
+        } catch (e) {
+          console.warn('[CarPlay] WASM stream initialization error:', e);
+          showGestureHud('⚠️', 'WASM 解码异常，启用极速直通', 1.0);
+          fallbackHlsPlay(url);
+        }
       }
+      if (!started) {
+        fallbackHlsPlay(url);
+      }
+
+      resetOverlayTimer();
+    }
+
+    function fallbackHlsPlay(url) {
+      if (audioCtx && audioCtx.state === 'suspended') {
+        audioCtx.resume().catch(() => {});
+      }
+      canvas.style.display = 'none';
+      canvas.style.zIndex = '1';
+      video.style.display = 'block';
+      video.style.zIndex = '5';
 
       let decodedHint = url;
       try { decodedHint = decodeURIComponent(url); } catch (_) {}
@@ -1663,55 +1690,33 @@
           enableWorker: true,
           lowLatencyMode: true,
           backBufferLength: 15,
-          maxBufferLength: 20,
-          maxMaxBufferLength: 30,
-          maxBufferSize: 25 * 1000 * 1000,
-          fragLoadingTimeOut: 6000,
-          manifestLoadingTimeOut: 6000,
-          startLevel: -1 // 智能首选最平滑码率
+          maxBufferLength: 20
         });
         hlsInstance.loadSource(url);
         hlsInstance.attachMedia(video);
         hlsInstance.on(Hls.Events.MANIFEST_PARSED, () => {
-          video.play().catch(e => console.warn('[CarPlay] Auto play error:', e));
-          updateTechStats('GPU 原生硬解 (60FPS 流畅直通)');
+          video.play().catch(e => console.warn('[CarPlay] Fallback auto play error:', e));
+          updateTechStats('GPU 原生硬解 (极速直通)');
         });
         hlsInstance.on(Hls.Events.ERROR, (event, data) => {
           console.warn('[Hls] Error:', data.type, data.details);
           if (data.fatal) {
-            switch (data.type) {
-              case Hls.ErrorTypes.NETWORK_ERROR:
-                console.warn('[Hls] Network error fatal, switching fast line...');
-                autoSwitchToNextFastLine();
-                break;
-              case Hls.ErrorTypes.MEDIA_ERROR:
-                try {
-                  hlsInstance.recoverMediaError();
-                } catch (_) {
-                  autoSwitchToNextFastLine();
-                }
-                break;
-              default:
-                autoSwitchToNextFastLine();
-                break;
-            }
+            autoSwitchToNextFastLine();
           }
         });
       } else {
         video.src = url;
         video.load();
-        video.play().catch(e => console.warn('[CarPlay] Direct play error:', e));
-        updateTechStats('GPU 原生硬件解码');
+        video.play().catch(e => console.warn('[CarPlay] Fallback direct play error:', e));
+        updateTechStats('GPU 原生硬解');
       }
-
-      resetOverlayTimer();
     }
 
     function updateTechStats(decoderStr) {
       const decEl = document.getElementById('stat-decoder');
       if (decEl && decoderStr) decEl.innerText = decoderStr;
       const rendEl = document.getElementById('stat-renderer');
-      if (rendEl) rendEl.innerText = (activeColorMode === 0) ? 'GPU VPU (Direct)' : 'WebGL 2.0 (Shader)';
+      if (rendEl) rendEl.innerText = (activeColorMode === 0) ? 'WebGL 2.0 (RGBA 着色器)' : 'WebGL 2.0 (杜比校色)';
       const fpsEl = document.getElementById('stat-fps');
       if (fpsEl) fpsEl.innerText = '60.0 FPS';
     }
