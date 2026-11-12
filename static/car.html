@@ -958,6 +958,11 @@
     let uBrightnessLoc = null;
     let uContrastLoc = null;
 
+    let glYuvProgram = null;
+    let texY = null, texU = null, texV = null;
+    let uYuvColorModeLoc = null, uYuvBrightnessLoc = null, uYuvContrastLoc = null;
+    let uSamplerYLoc = null, uSamplerULoc = null, uSamplerVLoc = null;
+
     let activeColorMode = 0; // 0: 原色直出(GPU原生硬件直通,0卡顿0崩溃), 1: 杜比校色, 2: 白天, 3: 夜间
     let userBrightness = 1.0;
     let userContrast = 1.0;
@@ -1120,6 +1125,80 @@
       uColorModeLoc = gl.getUniformLocation(glProgram, 'uColorMode');
       uBrightnessLoc = gl.getUniformLocation(glProgram, 'uBrightness');
       uContrastLoc = gl.getUniformLocation(glProgram, 'uContrast');
+
+      // 编译 YUV420P 高清硬件级片元着色器 (BT.709 高清标准矩阵，GPU 毫秒级颜色变换)
+      const fsYuvSrc = `
+        precision mediump float;
+        varying vec2 vTexCoord;
+        uniform sampler2D uSamplerY;
+        uniform sampler2D uSamplerU;
+        uniform sampler2D uSamplerV;
+        uniform int uColorMode;
+        uniform float uBrightness;
+        uniform float uContrast;
+
+        void main() {
+          float y = texture2D(uSamplerY, vTexCoord).r;
+          float u = texture2D(uSamplerU, vTexCoord).r - 0.5;
+          float v = texture2D(uSamplerV, vTexCoord).r - 0.5;
+
+          // BT.709 高清影视色彩空间转换矩阵
+          vec3 rgb;
+          rgb.r = y + 1.5748 * v;
+          rgb.g = y - 0.1873 * u - 0.4681 * v;
+          rgb.b = y + 1.8556 * u;
+
+          if (uColorMode == 1) {
+            rgb = (rgb - 0.5) * 1.18 + 0.52; // 杜比鲜艳增强
+          } else if (uColorMode == 2) {
+            rgb = (rgb - 0.5) * 1.3 + 0.55;  // 白天强光增强
+          } else if (uColorMode == 3) {
+            rgb = rgb * vec3(0.92, 0.88, 0.75) * 0.9; // 夜间防眩护眼
+          }
+
+          rgb = (rgb - 0.5) * uContrast + 0.5;
+          rgb = rgb * uBrightness;
+
+          gl_FragColor = vec4(clamp(rgb, 0.0, 1.0), 1.0);
+        }
+      `;
+
+      try {
+        const fsYuv = createShader(gl, gl.FRAGMENT_SHADER, fsYuvSrc);
+        glYuvProgram = gl.createProgram();
+        gl.attachShader(glYuvProgram, vs);
+        gl.attachShader(glYuvProgram, fsYuv);
+        gl.linkProgram(glYuvProgram);
+
+        const aYuvPos = gl.getAttribLocation(glYuvProgram, 'aPosition');
+        const aYuvTex = gl.getAttribLocation(glYuvProgram, 'aTexCoord');
+        gl.enableVertexAttribArray(aYuvPos);
+        gl.enableVertexAttribArray(aYuvTex);
+        gl.vertexAttribPointer(aYuvPos, 2, gl.FLOAT, false, 16, 0);
+        gl.vertexAttribPointer(aYuvTex, 2, gl.FLOAT, false, 16, 8);
+
+        function createYuvTex() {
+          const t = gl.createTexture();
+          gl.bindTexture(gl.TEXTURE_2D, t);
+          gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+          gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+          gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+          gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+          return t;
+        }
+        texY = createYuvTex();
+        texU = createYuvTex();
+        texV = createYuvTex();
+
+        uYuvColorModeLoc = gl.getUniformLocation(glYuvProgram, 'uColorMode');
+        uYuvBrightnessLoc = gl.getUniformLocation(glYuvProgram, 'uBrightness');
+        uYuvContrastLoc = gl.getUniformLocation(glYuvProgram, 'uContrast');
+        uSamplerYLoc = gl.getUniformLocation(glYuvProgram, 'uSamplerY');
+        uSamplerULoc = gl.getUniformLocation(glYuvProgram, 'uSamplerU');
+        uSamplerVLoc = gl.getUniformLocation(glYuvProgram, 'uSamplerV');
+      } catch (err) {
+        console.warn('[WebGL] YUV shaders init skipped:', err);
+      }
     }
 
     // 给独立 WebCodecs / WASM 引擎使用的统一帧渲染接口（VideoFrame / HTMLVideoElement / RGBA Uint8Array 均可作为纹理源）。
@@ -1166,6 +1245,47 @@
           }
           const imgData = new ImageData(new Uint8ClampedArray(pixels.buffer, pixels.byteOffset, pixels.byteLength), width, height);
           ctx2d.putImageData(imgData, 0, 0);
+        }
+      },
+      drawYuv(pixels, width, height) {
+        if (isWebGl && gl && glYuvProgram && texY) {
+          gl.useProgram(glYuvProgram);
+          if (canvas.width !== width || canvas.height !== height) {
+            canvas.width = width;
+            canvas.height = height;
+            gl.viewport(0, 0, width, height);
+          }
+
+          const yLen = width * height;
+          const uvLen = (width >> 1) * (height >> 1);
+          const yData = new Uint8Array(pixels.buffer, pixels.byteOffset, yLen);
+          const uData = new Uint8Array(pixels.buffer, pixels.byteOffset + yLen, uvLen);
+          const vData = new Uint8Array(pixels.buffer, pixels.byteOffset + yLen + uvLen, uvLen);
+
+          gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
+
+          gl.activeTexture(gl.TEXTURE0);
+          gl.bindTexture(gl.TEXTURE_2D, texY);
+          gl.texImage2D(gl.TEXTURE_2D, 0, gl.LUMINANCE, width, height, 0, gl.LUMINANCE, gl.UNSIGNED_BYTE, yData);
+          gl.uniform1i(uSamplerYLoc, 0);
+
+          gl.activeTexture(gl.TEXTURE1);
+          gl.bindTexture(gl.TEXTURE_2D, texU);
+          gl.texImage2D(gl.TEXTURE_2D, 0, gl.LUMINANCE, width >> 1, height >> 1, 0, gl.LUMINANCE, gl.UNSIGNED_BYTE, uData);
+          gl.uniform1i(uSamplerULoc, 1);
+
+          gl.activeTexture(gl.TEXTURE2);
+          gl.bindTexture(gl.TEXTURE_2D, texV);
+          gl.texImage2D(gl.TEXTURE_2D, 0, gl.LUMINANCE, width >> 1, height >> 1, 0, gl.LUMINANCE, gl.UNSIGNED_BYTE, vData);
+          gl.uniform1i(uSamplerVLoc, 2);
+
+          gl.uniform1i(uYuvColorModeLoc, activeColorMode);
+          gl.uniform1f(uYuvBrightnessLoc, userBrightness);
+          gl.uniform1f(uYuvContrastLoc, userContrast);
+          gl.drawArrays(gl.TRIANGLES, 0, 6);
+        } else if (this.drawRgba) {
+          // 降级回退
+          this.drawRgba(pixels, width, height);
         }
       }
     };
@@ -1627,9 +1747,11 @@
       }
     }
 
-    // 核心播放入口：全面采用 FFmpeg.wasm 720P RGBA 逐帧软解 (RGBA ➔ WebGL + WebAudio)
+    let activePlayId = 0;
+    // 核心播放入口：全面采用 FFmpeg.wasm 720P YUV420P 逐帧软解 (YUV420P ➔ WebGL + WebAudio)
     // 杜绝任何原生 GPU 解码；配合切片并行预载、-skip_loop_filter all 极速去块、首播充能水位线与平滑时钟锚定，实现 0 卡顿 720P 软解
     async function playMediaSource(url) {
+      const playId = ++activePlayId;
       initWebAudio();
       if (audioCtx && audioCtx.state === 'suspended') {
         audioCtx.resume().catch(() => {});
@@ -1660,16 +1782,18 @@
       if (window.CarMediaEngine) {
         try {
           started = await window.CarMediaEngine.startWasmStream(url, canvas, carFrameRenderer);
+          if (playId !== activePlayId) return;
           if (started) {
-            updateTechStats('FFmpeg.wasm 逐帧软解 (720P RGBA ➔ WebGL)');
+            updateTechStats('FFmpeg.wasm 逐帧软解 (720P YUV420P ➔ WebGL)');
             lineSwitchRetries = 0; // 成功出画，重置换源容错计数
           } else {
             console.warn('[CarPlay] WASM start returned false, switching to next line');
-            autoSwitchToNextFastLine('启动软解未就绪');
+            autoSwitchToNextFastLine('首片解码未就绪');
           }
         } catch (e) {
+          if (playId !== activePlayId) return;
           console.warn('[CarPlay] WASM stream initialization error:', e);
-          autoSwitchToNextFastLine('线路解析异常');
+          autoSwitchToNextFastLine('切片解码异常');
         }
       } else {
         autoSwitchToNextFastLine('WASM引擎加载异常');
@@ -1682,13 +1806,15 @@
       const decEl = document.getElementById('stat-decoder');
       if (decEl && decoderStr) decEl.innerText = decoderStr;
       const rendEl = document.getElementById('stat-renderer');
-      if (rendEl) rendEl.innerText = (activeColorMode === 0) ? 'WebGL 2.0 (720P RGBA 着色器)' : 'WebGL 2.0 (杜比色彩增强)';
+      if (rendEl) rendEl.innerText = (activeColorMode === 0) ? 'WebGL 2.0 (720P YUV420P BT.709)' : 'WebGL 2.0 (杜比校色增强)';
       const fpsEl = document.getElementById('stat-fps');
       if (fpsEl) fpsEl.innerText = '60.0 FPS';
     }
 
     // 智能防卡软解看门狗：挂接 CarMediaEngine 软解核心停滞与解码异常回调，自动无缝切到下一条最快线路
     let lineSwitchRetries = 0;
+    let lastLineSwitchTime = 0;
+    let isAutoSwitching = false;
     if (window.CarMediaEngine) {
       window.CarMediaEngine.onStall = (reason) => {
         console.warn('[CarPlay] WASM watchdog onStall:', reason);
@@ -1701,22 +1827,33 @@
     }
 
     function autoSwitchToNextFastLine(reason = '卡顿/超时') {
+      const now = Date.now();
+      if (now - lastLineSwitchTime < 5000 || isAutoSwitching) {
+        console.warn('[CarPlay] autoSwitchToNextFastLine 防抖节流中');
+        return;
+      }
       if (!currentLines || currentLines.length <= 1) {
         showGestureHud('⚠️', '当前无更多可用备用源', 2.0);
         return;
       }
       lineSwitchRetries++;
-      if (lineSwitchRetries > currentLines.length * 2) {
+      if (lineSwitchRetries > currentLines.length) {
         console.warn('[Car] All lines attempted and failed');
         showGestureHud('⚠️', '所有软解线路均响应超时，请点击换源重试', 3.0);
         return;
       }
+      lastLineSwitchTime = now;
+      isAutoSwitching = true;
       const nextIdx = (currentLineIndex + 1) % currentLines.length;
       console.log(`[Car] Auto switching line from ${currentLineIndex} to ${nextIdx} (原因: ${reason})`);
       const nextLine = currentLines[nextIdx];
       const name = getCleanLineName(nextLine);
-      showGestureHud('⚡', `检测到${reason}，秒切至【${name}】...`, 1.5);
-      selectLine(nextIdx);
+      showGestureHud('⚡', `检测到${reason}，自动切至【${name}】...`, 1.5);
+      try {
+        selectLine(nextIdx);
+      } finally {
+        setTimeout(() => { isAutoSwitching = false; }, 2000);
+      }
     }
 
     let engineDiagInterval = null;
@@ -1954,10 +2091,9 @@
       const t0 = performance.now();
       try {
         const ctrl = new AbortController();
-        const tid = setTimeout(() => ctrl.abort(), 1800);
+        const tid = setTimeout(() => ctrl.abort(), 2000);
         const resp = await fetch(probeUrl, {
           method: 'GET',
-          headers: { 'Range': 'bytes=0-512' },
           signal: ctrl.signal
         });
         clearTimeout(tid);
@@ -2009,7 +2145,7 @@
 
     async function retestCurrentLines() {
       if (!currentLines || currentLines.length === 0) return;
-      showGestureHud('⚡', '正在重新并发测速...', 1.0);
+      showGestureHud('⚡', '正在并发测速...', 1.0);
       const linesBody = document.getElementById('drawer-lines-body');
       linesBody.innerHTML = '<div style="color: var(--accent-cyan); font-size: 15px; padding: 10px;">正在并发测速优选极速源...</div>';
 
@@ -2022,10 +2158,29 @@
       showGestureHud('⚡', '测速完成，已按响应速度重排', 1.2);
     }
 
+    async function benchmarkLinesInBackground(lines) {
+      if (!lines || lines.length <= 1) return;
+      const candidateCount = Math.min(6, lines.length);
+      for (let i = 0; i < candidateCount; i++) {
+        try {
+          const tested = await testLineLatency(lines[i]);
+          if (tested.latency < 99999) {
+            lines[i].latency = tested.latency;
+            lines[i].available = tested.available;
+            renderLinesDrawer(currentLines);
+            if (i === currentLineIndex) {
+              const nameEl = document.getElementById('btn-line-name');
+              const cleanName = getCleanLineName(lines[i]);
+              if (nameEl) nameEl.innerText = cleanName + ` ${tested.latency}ms`;
+            }
+          }
+        } catch (_) {}
+      }
+    }
+
     async function loadPlayLines(token, title = '', epNum = 1) {
-      document.getElementById('btn-line-name').innerText = '测速中...';
       const linesBody = document.getElementById('drawer-lines-body');
-      linesBody.innerHTML = '<div style="color: var(--accent-cyan); font-size: 15px; padding: 10px;">正在检索线路并并发测速中...</div>';
+      linesBody.innerHTML = '<div style="color: var(--accent-cyan); font-size: 15px; padding: 10px;">正在检索优质极速线路...</div>';
 
       try {
         const query = '?title=' + encodeURIComponent(title) + '&ep=' + encodeURIComponent(epNum);
@@ -2037,28 +2192,18 @@
         }
 
         const rawLines = d.lines;
-        showGestureHud('⚡', `检索到 ${rawLines.length} 条线路，正在并发测速...`, 1.0);
-
-        // 并发对候选线路进行快速 RTT 测速（限制单次探测 1.8s）
-        const candidateCount = Math.min(6, rawLines.length);
-        const testedCandidates = await Promise.all(rawLines.slice(0, candidateCount).map(testLineLatency));
-        const remaining = rawLines.slice(candidateCount).map(l => ({ ...l, latency: 99999 }));
-        const testedLines = testedCandidates.concat(remaining);
-
-        // 测速智能排序：响应时间最低的排最前
-        testedLines.sort((a, b) => (a.latency || 99999) - (b.latency || 99999));
-
-        currentLines = testedLines;
+        currentLines = rawLines;
         currentLineIndex = 0;
         lineSwitchRetries = 0;
-
         renderLinesDrawer(currentLines);
 
-        // 自动选择并播放测速第一名（最快极速源）
-        const fastest = currentLines[0];
-        const latStr = (fastest.latency && fastest.latency < 5000) ? ` (${fastest.latency}ms)` : '';
-        showGestureHud('⚡', `优选最快极速源: ${getCleanLineName(fastest)}${latStr}`, 1.2);
-        applyLinePlay(fastest);
+        // 立即秒播首选线路，0 秒等待出画！
+        const firstLine = currentLines[0];
+        showGestureHud('⚡', `优选播放: ${getCleanLineName(firstLine)}`, 1.2);
+        applyLinePlay(firstLine);
+
+        // 后台并发无感测速，动态更新测速徽标
+        benchmarkLinesInBackground(currentLines);
       } catch (e) {
         console.error('[CarPlay] Line resolution/test error:', e);
         linesBody.innerHTML = '<div style="color: var(--accent-red); padding: 10px;">车机线路解析网络异常</div>';
