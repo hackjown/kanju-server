@@ -838,6 +838,20 @@
           <input type="range" id="vol-range" min="0" max="2" step="0.05" value="1.0" oninput="setMasterVolume(this.value)" style="flex: 1; accent-color: var(--accent-cyan); height: 8px;">
           <span id="vol-val-disp" style="font-weight: 800; color: var(--accent-cyan); min-width: 50px;">100%</span>
         </div>
+
+        <!-- 音画毫秒同步校准控制 (解决车载蓝牙/声卡声音超前画面问题) -->
+        <div style="width: 100%; margin-top: 14px; padding-top: 14px; border-top: 1px solid var(--border-dark); display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 10px;">
+          <div>
+            <div style="font-weight: 700; color: var(--accent-cyan); font-size: 15px;">⚡ 音画同步毫秒校准:</div>
+            <div style="font-size: 13px; color: var(--text-muted);">解决车机声音超前/滞后，默认已开启抗抖缓冲对齐，支持车载独立微调</div>
+          </div>
+          <div style="display: flex; align-items: center; gap: 8px;">
+            <button class="btn-car" onclick="adjustAvSync(-50)" title="画面延后50ms / 声音相对提前">-50ms</button>
+            <span id="disp-av-sync" style="font-weight: 800; color: #fbbf24; font-size: 16px; min-width: 80px; text-align: center;">0ms (基准)</span>
+            <button class="btn-car" onclick="adjustAvSync(50)" title="画面提前50ms / 声音相对延后">+50ms</button>
+            <button class="btn-car" onclick="resetAvSync()" style="font-size: 12px; padding: 4px 8px;">重置</button>
+          </div>
+        </div>
       </div>
     </div>
 
@@ -1301,7 +1315,45 @@
     let playbackStartPerfMs = 0;
     let hasRenderedAnyVideoFrame = false;
     let audioHasPlayed = false;
+    let audioReadyToStart = false;
+    let audioStartFallbackTimer = null;
     let scheme3WatchdogTimer = null;
+
+    // 黄金音画同步补偿值 (默认 0ms 基准对齐，配合前置抗抖缓冲垫实现丝滑唇形匹配，支持车载独立微调)
+    let userAvSyncOffset = 0.0;
+    try {
+      const savedSync = localStorage.getItem('car_av_sync_sec');
+      if (savedSync !== null) {
+        const val = parseFloat(savedSync);
+        if (!isNaN(val) && val >= -1.0 && val <= 1.0) userAvSyncOffset = val;
+      }
+    } catch (_) {}
+
+    function adjustAvSync(deltaMs) {
+      userAvSyncOffset = Math.max(-0.5, Math.min(1.0, userAvSyncOffset + deltaMs / 1000));
+      userAvSyncOffset = Math.round(userAvSyncOffset * 1000) / 1000;
+      try { localStorage.setItem('car_av_sync_sec', userAvSyncOffset.toString()); } catch (_) {}
+      updateAvSyncDisplay();
+      showGestureHud('⏱️', `音画校准: ${formatAvSync(userAvSyncOffset)}`, 0.6);
+    }
+
+    function resetAvSync() {
+      userAvSyncOffset = 0.0;
+      try { localStorage.setItem('car_av_sync_sec', '0.0'); } catch (_) {}
+      updateAvSyncDisplay();
+      showGestureHud('⏱️', '音画校准已重置: 0ms (基准)', 0.6);
+    }
+
+    function formatAvSync(sec) {
+      const ms = Math.round(sec * 1000);
+      if (ms === 0) return '0ms (基准)';
+      return (ms > 0 ? '+' : '') + ms + 'ms';
+    }
+
+    function updateAvSyncDisplay() {
+      const el = document.getElementById('disp-av-sync');
+      if (el) el.innerText = formatAvSync(userAvSyncOffset);
+    }
 
     function resetScheme3Watchdog() {
       clearTimeout(scheme3WatchdogTimer);
@@ -1410,9 +1462,24 @@
                   showGestureHud('⚡', '极速就绪', 0.5);
                 }
                 frameQueue.push({ pts, bitmap: bmp });
-                if (frameQueue.length > 40) {
+                if (frameQueue.length > 50) {
                   const dropped = frameQueue.shift();
                   if (dropped.bitmap && typeof dropped.bitmap.close === 'function') dropped.bitmap.close();
+                }
+
+                // 前置抗抖缓冲垫：当视频帧缓冲达到 3 帧（约 150ms 缓冲垫）且音频尚未开始时启动音频
+                // 这样视频永远拥有 150ms~200ms 的前置安全缓冲，杜绝网络微卡顿与音画脱节！
+                if (!audioReadyToStart && frameQueue.length >= 3) {
+                  audioReadyToStart = true;
+                  if (audioStartFallbackTimer) clearTimeout(audioStartFallbackTimer);
+                  audio.play().then(() => {
+                    const btnAudioUnlock = document.getElementById('btn-audio-unlock');
+                    if (btnAudioUnlock) btnAudioUnlock.style.display = 'none';
+                  }).catch(e => {
+                    console.warn('[Audio] autoplay restricted:', e);
+                    const btnAudioUnlock = document.getElementById('btn-audio-unlock');
+                    if (btnAudioUnlock) btnAudioUnlock.style.display = 'inline-flex';
+                  });
                 }
               }).catch(() => {});
             } else {
@@ -1429,8 +1496,20 @@
                   showGestureHud('⚡', '极速就绪', 0.5);
                 }
                 frameQueue.push({ pts, bitmap: img });
-                if (frameQueue.length > 40) {
+                if (frameQueue.length > 50) {
                   frameQueue.shift();
+                }
+                if (!audioReadyToStart && frameQueue.length >= 3) {
+                  audioReadyToStart = true;
+                  if (audioStartFallbackTimer) clearTimeout(audioStartFallbackTimer);
+                  audio.play().then(() => {
+                    const btnAudioUnlock = document.getElementById('btn-audio-unlock');
+                    if (btnAudioUnlock) btnAudioUnlock.style.display = 'none';
+                  }).catch(e => {
+                    console.warn('[Audio] autoplay restricted:', e);
+                    const btnAudioUnlock = document.getElementById('btn-audio-unlock');
+                    if (btnAudioUnlock) btnAudioUnlock.style.display = 'inline-flex';
+                  });
                 }
               };
               img.src = objUrl;
@@ -1463,7 +1542,7 @@
           updateProgress();
           frameCount++;
         } else {
-          // 方案三：声卡 DAC 硬件绝对时钟对齐
+          // 方案三：声卡 DAC 硬件绝对时钟对齐 + 毫秒级音画同步黄金补偿 (消除声音超前问题)
           const isAudioActive = audio && !audio.paused && !audio.ended && (audio.currentTime > 0);
           if (isAudioActive) {
             audioHasPlayed = true;
@@ -1471,11 +1550,11 @@
 
           let curTime = 0;
           if (isAudioActive) {
-            // 音频已出声：以声卡为唯一主基准，保证绝对零漂移
-            curTime = streamStartOffset + audio.currentTime;
+            // 音频已出声：以声卡为主基准，加上用户微调补偿 (默认 0ms 基准对齐)
+            curTime = streamStartOffset + audio.currentTime + userAvSyncOffset;
           } else if (audioHasPlayed && audio && audio.paused) {
             // 用户点击暂停：定格画面
-            curTime = streamStartOffset + (audio.currentTime || 0);
+            curTime = streamStartOffset + (audio.currentTime || 0) + userAvSyncOffset;
           } else {
             // 音频尚未出声（网络缓冲中或被系统拦截自动播放）：
             // 若 1.6 秒后仍未出声，说明被车载自动播放策略拦截，启动虚拟系统时钟推进，绝不黑屏卡死！
@@ -1483,7 +1562,7 @@
               playbackStartPerfMs = performance.now();
             }
             if (playbackStartPerfMs && (performance.now() - playbackStartPerfMs > 1600)) {
-              curTime = streamStartOffset + Math.max(0, (performance.now() - playbackStartPerfMs - 1600) / 1000);
+              curTime = streamStartOffset + Math.max(0, (performance.now() - playbackStartPerfMs - 1600) / 1000) + userAvSyncOffset;
             } else {
               // 等待音频就绪中：保持首帧静态封面，绝不提前跑掉导致音画不同步！
               curTime = 0;
@@ -1493,17 +1572,17 @@
           if (curTime > 0) {
             updateProgress();
 
-            // 1. 淘汰落后音频时间 80ms 以上的陈旧帧，保证音画绝不脱节
-            while (frameQueue.length > 1 && frameQueue[0].pts < curTime - 0.08) {
+            // 1. 淘汰落后音频时间 250ms 以上的陈旧帧 (平时绝不轻易丢帧，从根本上消灭微卡！)
+            while (frameQueue.length > 1 && frameQueue[0].pts < curTime - 0.25) {
               const old = frameQueue.shift();
               if (old.bitmap && typeof old.bitmap.close === 'function') old.bitmap.close();
             }
 
-            // 2. 平滑节拍控制：单次刷新仅出 1 帧，且必须到达帧时间戳（单帧 25ms 容差）
+            // 2. 平滑节拍控制：单次刷新仅出 1 帧，且到达帧时间戳呈现 (单帧 45ms 容差)
             // 杜绝突发连画多帧导致缓存耗尽引发的周期性微卡顿！
             if (frameQueue.length > 0) {
               const candidate = frameQueue[0];
-              if (candidate.pts <= curTime + 0.025) {
+              if (candidate.pts <= curTime + 0.045) {
                 const f = frameQueue.shift();
                 const bmp = f.bitmap;
                 if (bmp) {
@@ -2007,18 +2086,30 @@
 
       renderFrameLoop();
 
-      // 启动标准 HTML5 Audio 播放 (零视频检测风险)
+      // 启动标准 HTML5 Audio 流 (零原生视频标签 · 100% 规避车机行车拦截)
+      // 注意：必须等待 pumpVideoStream 缓冲好前 3 帧视频（约 150ms 抗抖缓冲垫）后再触发 audio.play()，
+      // 从而从根源上消除“声音比画面超前”与“缓冲饥饿微卡”！
+      audioReadyToStart = false;
+      if (audioStartFallbackTimer) clearTimeout(audioStartFallbackTimer);
       audio.src = `/car_stream/audio?u=${encodeURIComponent(url)}&ss=${startSec}`;
       audio.currentTime = 0;
       audio.playbackRate = currentPlaybackRate || 1.0;
-      audio.play().then(() => {
-        const btnAudioUnlock = document.getElementById('btn-audio-unlock');
-        if (btnAudioUnlock) btnAudioUnlock.style.display = 'none';
-      }).catch(e => {
-        console.warn('[Audio] autoplay restricted:', e);
-        const btnAudioUnlock = document.getElementById('btn-audio-unlock');
-        if (btnAudioUnlock) btnAudioUnlock.style.display = 'inline-flex';
-      });
+      audio.load();
+
+      // 前置抗抖缓冲保底定时器：若视频因弱网在 1.5 秒内未就绪，强制启动音频，绝不卡死
+      audioStartFallbackTimer = setTimeout(() => {
+        if (!audioReadyToStart) {
+          audioReadyToStart = true;
+          audio.play().then(() => {
+            const btnAudioUnlock = document.getElementById('btn-audio-unlock');
+            if (btnAudioUnlock) btnAudioUnlock.style.display = 'none';
+          }).catch(e => {
+            console.warn('[Audio] fallback autoplay restricted:', e);
+            const btnAudioUnlock = document.getElementById('btn-audio-unlock');
+            if (btnAudioUnlock) btnAudioUnlock.style.display = 'inline-flex';
+          });
+        }
+      }, 1500);
 
       // 启动极速视频帧流
       const ctrl = new AbortController();
@@ -2842,6 +2933,9 @@
 
     // 页面启动检查 URL 参数
     window.addEventListener('DOMContentLoaded', () => {
+      try {
+        updateAvSyncDisplay();
+      } catch (_) {}
       try {
         initCanvasRenderer();
       } catch (e) {
