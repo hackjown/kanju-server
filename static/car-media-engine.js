@@ -127,8 +127,11 @@ registerProcessor('pcm-ring-buffer-processor', PcmRingBufferProcessor);
   let onErrorCallback = null;
 
   const state = {
-    mode: 'idle', // 'idle' | 'webcodecs' | 'wasm' | 'native'
+    mode: 'idle', // 'idle' | 'hardware_canvas' | 'webcodecs' | 'wasm' | 'native'
     generation: 0,
+    offscreenVideo: null,
+    hlsInstance: null,
+    hardwareCanvasRaf: 0,
     mp4File: null,
     videoDecoder: null,
     audioDecoder: null,
@@ -430,6 +433,21 @@ registerProcessor('pcm-ring-buffer-processor', PcmRingBufferProcessor);
   function stop() {
     state.generation++;
     stopFrames();
+    if (state.hardwareCanvasRaf) {
+      cancelAnimationFrame(state.hardwareCanvasRaf);
+      state.hardwareCanvasRaf = 0;
+    }
+    if (state.hlsInstance) {
+      try { state.hlsInstance.destroy(); } catch (_) {}
+      state.hlsInstance = null;
+    }
+    if (state.offscreenVideo) {
+      try {
+        state.offscreenVideo.pause();
+        state.offscreenVideo.removeAttribute('src');
+        state.offscreenVideo.load();
+      } catch (_) {}
+    }
     try { state.videoDecoder?.close(); } catch (_) {}
     try { state.audioDecoder?.close(); } catch (_) {}
     state.videoDecoder = null;
@@ -517,7 +535,7 @@ registerProcessor('pcm-ring-buffer-processor', PcmRingBufferProcessor);
   // 计算当前虚拟媒体时钟（秒）
   function getCurrentTime() {
     if (state.mode === 'idle') return 0;
-    if (state.mode === 'native') return state.masterVideo ? state.masterVideo.currentTime : 0;
+    if (state.mode === 'native' || state.mode === 'hardware_canvas') return state.masterVideo ? state.masterVideo.currentTime : 0;
     if (state.paused) return state.pauseTime;
 
     // 优先采用 AudioWorklet 硬件 DAC 播放采样数计算（绝对零漂移）
@@ -1590,6 +1608,126 @@ registerProcessor('pcm-ring-buffer-processor', PcmRingBufferProcessor);
     return true;
   }
 
+  // ================= 核心启动：硬件芯片 VPU 直通 Canvas 引擎 (行车免黑屏 + 1080P/4K 60FPS) =================
+  // 核心机理：画面 100% 渲染在 <canvas> 上，完全脱离屏幕可视区域解码，彻底规避车机系统的行车安全屏蔽与遮挡
+  async function startHardwareCanvasStream(url, canvas, glRenderer) {
+    stop();
+    const generation = state.generation;
+    state.mode = 'hardware_canvas';
+    status('启动硬件 Canvas 直通渲染…', 'hardware_canvas');
+
+    let cleanUrl = url;
+    if ((cleanUrl.includes('/play/') || cleanUrl.includes('/share/')) && !cleanUrl.includes('.m3u8') && !cleanUrl.includes('.mp4')) {
+      cleanUrl = cleanUrl.replace(/\/+$/, '') + '/index.m3u8';
+    }
+
+    // 确保离屏硬件解码节点就绪（彻底脱离可视区域，避免触发车机行车安全拦截）
+    let offscreenVid = document.getElementById('car-offscreen-video');
+    if (!offscreenVid) {
+      offscreenVid = document.createElement('video');
+      offscreenVid.id = 'car-offscreen-video';
+      offscreenVid.style.cssText = 'position:fixed;top:-9999px;left:-9999px;width:1px;height:1px;opacity:0.001;pointer-events:none;z-index:-9999;';
+      offscreenVid.setAttribute('playsinline', '');
+      offscreenVid.setAttribute('webkit-playsinline', '');
+      offscreenVid.setAttribute('x5-video-player-type', 'h5');
+      offscreenVid.setAttribute('x5-playsinline', '');
+      offscreenVid.crossOrigin = 'anonymous';
+      document.body.appendChild(offscreenVid);
+    }
+    state.offscreenVideo = offscreenVid;
+    state.masterVideo = offscreenVid;
+
+    // 音频接入车载 DSP WebAudio 链路（保证手势音量与 3D 环绕杜比音效生效）
+    if (state.audioCtx && state.audioInput && !offscreenVid._webAudioConnected) {
+      try {
+        const srcNode = state.audioCtx.createMediaElementSource(offscreenVid);
+        srcNode.connect(state.audioInput);
+        offscreenVid._webAudioConnected = true;
+      } catch (_) {}
+    }
+
+    let decodedHint = cleanUrl;
+    try { decodedHint = decodeURIComponent(cleanUrl); } catch (_) {}
+    const isHls = /\.m3u8(?:$|[?#&])/i.test(decodedHint) || /hls/i.test(decodedHint);
+
+    if (isHls && window.Hls && Hls.isSupported()) {
+      const hls = new Hls({
+        maxBufferLength: 30,
+        maxMaxBufferLength: 60,
+        enableWorker: true
+      });
+      state.hlsInstance = hls;
+      hls.loadSource(cleanUrl);
+      hls.attachMedia(offscreenVid);
+
+      hls.on(Hls.Events.MANIFEST_PARSED, () => {
+        if (generation === state.generation) {
+          offscreenVid.play().catch(e => console.warn('[HardwareCanvas] play error:', e));
+        }
+      });
+
+      hls.on(Hls.Events.ERROR, (event, data) => {
+        if (generation !== state.generation) return;
+        if (data.fatal) {
+          console.warn('[HardwareCanvas] HLS fatal error:', data.type, data.details);
+          switch (data.type) {
+            case Hls.ErrorTypes.NETWORK_ERROR:
+              hls.startLoad();
+              break;
+            case Hls.ErrorTypes.MEDIA_ERROR:
+              hls.recoverMediaError();
+              break;
+            default:
+              if (typeof onStallCallback === 'function') {
+                onStallCallback('HLS流异常');
+              }
+              break;
+          }
+        }
+      });
+    } else {
+      offscreenVid.src = cleanUrl;
+      offscreenVid.play().catch(e => console.warn('[HardwareCanvas] play error:', e));
+    }
+
+    // 硬件帧同步上屏：利用 requestVideoFrameCallback 捕获芯片 VPU 硬解帧，直通 WebGL Canvas 杜比片元着色器
+    let renderedAny = false;
+
+    function renderLoop(now, metadata) {
+      if (generation !== state.generation || state.mode !== 'hardware_canvas') return;
+      if (offscreenVid.readyState >= 2 && offscreenVid.videoWidth > 0) {
+        const w = offscreenVid.videoWidth;
+        const h = offscreenVid.videoHeight;
+        if (canvas.width !== w || canvas.height !== h) {
+          canvas.width = w;
+          canvas.height = h;
+          if (glRenderer.resize) glRenderer.resize(w, h);
+        }
+        glRenderer.draw(offscreenVid);
+        state.lastRenderPerf = getNowMs();
+        if (!renderedAny) {
+          renderedAny = true;
+          state.isStalled = false;
+        }
+      }
+
+      if ('requestVideoFrameCallback' in offscreenVid) {
+        offscreenVid.requestVideoFrameCallback(renderLoop);
+      } else {
+        state.hardwareCanvasRaf = requestAnimationFrame(renderLoop);
+      }
+    }
+
+    if ('requestVideoFrameCallback' in offscreenVid) {
+      offscreenVid.requestVideoFrameCallback(renderLoop);
+    } else {
+      state.hardwareCanvasRaf = requestAnimationFrame(renderLoop);
+    }
+
+    status('硬件 Canvas 直通 (60FPS · 杜比校色 · 行车免黑屏)', 'hardware_canvas');
+    return true;
+  }
+
   // 核心统一调用入口：无论是 M3U8 还是 MP4，全面使用 WASM 逐帧软解
   async function startWasmStream(url, canvas, glRenderer) {
     let cleanUrl = url;
@@ -1667,7 +1805,7 @@ registerProcessor('pcm-ring-buffer-processor', PcmRingBufferProcessor);
         });
       }
       return true;
-    } else if (state.mode === 'native' && state.masterVideo) {
+    } else if ((state.mode === 'native' || state.mode === 'hardware_canvas') && state.masterVideo) {
       state.masterVideo.currentTime = target;
       return true;
     }
@@ -1677,6 +1815,10 @@ registerProcessor('pcm-ring-buffer-processor', PcmRingBufferProcessor);
   function play() {
     if (!state.paused) return;
     state.paused = false;
+    if (state.mode === 'hardware_canvas' && state.masterVideo) {
+      state.masterVideo.play().catch(() => {});
+      return;
+    }
     if (state.audioCtx?.state === 'suspended') {
       state.audioCtx.resume().catch(() => {});
     }
@@ -1691,6 +1833,10 @@ registerProcessor('pcm-ring-buffer-processor', PcmRingBufferProcessor);
     if (state.paused) return;
     state.pauseTime = getCurrentTime();
     state.paused = true;
+    if (state.mode === 'hardware_canvas' && state.masterVideo) {
+      state.masterVideo.pause();
+      return;
+    }
     if (state.workletNode) {
       state.workletNode.port.postMessage({ type: 'pause' });
     }
@@ -1698,6 +1844,9 @@ registerProcessor('pcm-ring-buffer-processor', PcmRingBufferProcessor);
 
   function setPlaybackRate(rate) {
     state.playbackRate = Math.max(0.5, Math.min(2.0, Number(rate) || 1.0));
+    if (state.mode === 'hardware_canvas' && state.masterVideo) {
+      state.masterVideo.playbackRate = state.playbackRate;
+    }
   }
 
   function getDiagnostics() {
@@ -1731,6 +1880,8 @@ registerProcessor('pcm-ring-buffer-processor', PcmRingBufferProcessor);
   }
 
   window.CarMediaEngine = {
+    startHardwareCanvasStream,
+    startStream: startHardwareCanvasStream,
     safeToBlobURL,
     startWasmStream,
     startWasmHlsDecoder,
@@ -1747,12 +1898,23 @@ registerProcessor('pcm-ring-buffer-processor', PcmRingBufferProcessor);
     getDiagnostics,
     get mode() { return state.mode; },
     get hasActiveStream() {
-      return (state.mode === 'webcodecs' && (state.frames.length > 0 || !!state.lastFrame)) ||
+      return (state.mode === 'hardware_canvas' && state.masterVideo && state.masterVideo.readyState >= 1) ||
+             (state.mode === 'webcodecs' && (state.frames.length > 0 || !!state.lastFrame)) ||
              (state.mode === 'wasm' && state.wasmFrames && state.wasmFrames.length > 0);
     },
     get currentTime() { return getCurrentTime(); },
-    get duration() { return state.duration; },
-    get paused() { return state.paused; },
+    get duration() {
+      if (state.mode === 'hardware_canvas' && state.masterVideo && state.masterVideo.duration) {
+        return state.masterVideo.duration;
+      }
+      return state.duration;
+    },
+    get paused() {
+      if (state.mode === 'hardware_canvas' && state.masterVideo) {
+        return state.masterVideo.paused;
+      }
+      return state.paused;
+    },
     get playbackRate() { return state.playbackRate; },
     set onStall(fn) { onStallCallback = fn; },
     get onStall() { return onStallCallback; },
