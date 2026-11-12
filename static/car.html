@@ -800,8 +800,11 @@
     <!-- 弹窗 1: 线路切换抽屉 -->
     <div class="car-drawer" id="drawer-lines">
       <div class="drawer-header">
-        <div class="drawer-title">⚡ 选择播放线路（⚡极速秒开首选 · 杜绝卡顿）</div>
-        <button class="btn-car" onclick="closeDrawer('drawer-lines')">关闭</button>
+        <div class="drawer-title">⚡ 极速软解线路（并发测速 · 优选最快 · 自动换源）</div>
+        <div style="display: flex; gap: 8px;">
+          <button class="btn-car" onclick="retestCurrentLines()" style="padding: 6px 14px; font-size: 13px;">⚡ 重新测速</button>
+          <button class="btn-car" onclick="closeDrawer('drawer-lines')">关闭</button>
+        </div>
       </div>
       <div class="drawer-body" id="drawer-lines-body">
         <!-- 动态线路按钮 -->
@@ -1624,8 +1627,8 @@
       }
     }
 
-    // 核心播放入口：全面恢复并升级 FFmpeg.wasm RGBA 逐帧软解 (RGBA ➔ WebGL + WebAudio)
-    // 配合切片并行预载、-skip_loop_filter all 极速去块、首播充能水位线与平滑时钟锚定，实现 0 卡顿软解
+    // 核心播放入口：全面采用 FFmpeg.wasm 720P RGBA 逐帧软解 (RGBA ➔ WebGL + WebAudio)
+    // 杜绝任何原生 GPU 解码；配合切片并行预载、-skip_loop_filter all 极速去块、首播充能水位线与平滑时钟锚定，实现 0 卡顿 720P 软解
     async function playMediaSource(url) {
       initWebAudio();
       if (audioCtx && audioCtx.state === 'suspended') {
@@ -1640,114 +1643,79 @@
         hlsInstance.destroy();
         hlsInstance = null;
       }
-      // 彻底清空并停用原生 video，杜绝原生解码器抢占资源
+      // 彻底清空并停用原生 video，杜绝原生 GPU 解码器抢占系统资源
       video.pause();
       video.removeAttribute('src');
       video.load();
 
-      // 显示层级：以 WebGL Canvas 逐帧渲染为主显示层
+      // 显示层级：以 WebGL Canvas 逐帧渲染为主显示层，隐藏任何原生视频容器
       canvas.style.display = 'block';
       canvas.style.zIndex = '5';
       video.style.display = 'none';
       video.style.zIndex = '1';
 
-      showGestureHud('⚡', '启动 FFmpeg.wasm 逐帧软解...', 0.6);
+      showGestureHud('⚡', '启动 FFmpeg.wasm 720P 逐帧软解...', 0.6);
 
       let started = false;
       if (window.CarMediaEngine) {
         try {
-          await window.CarMediaEngine.startWasmStream(url, canvas, carFrameRenderer);
-          started = true;
-          updateTechStats('FFmpeg.wasm 逐帧软解 (RGBA ➔ WebGL)');
+          started = await window.CarMediaEngine.startWasmStream(url, canvas, carFrameRenderer);
+          if (started) {
+            updateTechStats('FFmpeg.wasm 逐帧软解 (720P RGBA ➔ WebGL)');
+            lineSwitchRetries = 0; // 成功出画，重置换源容错计数
+          } else {
+            console.warn('[CarPlay] WASM start returned false, switching to next line');
+            autoSwitchToNextFastLine('启动软解未就绪');
+          }
         } catch (e) {
           console.warn('[CarPlay] WASM stream initialization error:', e);
-          showGestureHud('⚠️', 'WASM 解码异常，启用极速直通', 1.0);
-          fallbackHlsPlay(url);
+          autoSwitchToNextFastLine('线路解析异常');
         }
-      }
-      if (!started) {
-        fallbackHlsPlay(url);
+      } else {
+        autoSwitchToNextFastLine('WASM引擎加载异常');
       }
 
       resetOverlayTimer();
-    }
-
-    function fallbackHlsPlay(url) {
-      if (audioCtx && audioCtx.state === 'suspended') {
-        audioCtx.resume().catch(() => {});
-      }
-      canvas.style.display = 'none';
-      canvas.style.zIndex = '1';
-      video.style.display = 'block';
-      video.style.zIndex = '5';
-
-      let decodedHint = url;
-      try { decodedHint = decodeURIComponent(url); } catch (_) {}
-      const isHls = /\.m3u8(?:$|[?#&])/i.test(decodedHint);
-
-      if (isHls && window.Hls && Hls.isSupported()) {
-        hlsInstance = new Hls({
-          enableWorker: true,
-          lowLatencyMode: true,
-          backBufferLength: 15,
-          maxBufferLength: 20
-        });
-        hlsInstance.loadSource(url);
-        hlsInstance.attachMedia(video);
-        hlsInstance.on(Hls.Events.MANIFEST_PARSED, () => {
-          video.play().catch(e => console.warn('[CarPlay] Fallback auto play error:', e));
-          updateTechStats('GPU 原生硬解 (极速直通)');
-        });
-        hlsInstance.on(Hls.Events.ERROR, (event, data) => {
-          console.warn('[Hls] Error:', data.type, data.details);
-          if (data.fatal) {
-            autoSwitchToNextFastLine();
-          }
-        });
-      } else {
-        video.src = url;
-        video.load();
-        video.play().catch(e => console.warn('[CarPlay] Fallback direct play error:', e));
-        updateTechStats('GPU 原生硬解');
-      }
     }
 
     function updateTechStats(decoderStr) {
       const decEl = document.getElementById('stat-decoder');
       if (decEl && decoderStr) decEl.innerText = decoderStr;
       const rendEl = document.getElementById('stat-renderer');
-      if (rendEl) rendEl.innerText = (activeColorMode === 0) ? 'WebGL 2.0 (RGBA 着色器)' : 'WebGL 2.0 (杜比校色)';
+      if (rendEl) rendEl.innerText = (activeColorMode === 0) ? 'WebGL 2.0 (720P RGBA 着色器)' : 'WebGL 2.0 (杜比色彩增强)';
       const fpsEl = document.getElementById('stat-fps');
       if (fpsEl) fpsEl.innerText = '60.0 FPS';
     }
 
-    // 智能防卡看门狗：如果网络缓冲停滞超过 3.8 秒，自动无缝切到下一条极速源
-    let stallWatchdog = null;
-    video.addEventListener('waiting', () => {
-      if (video.paused) return;
-      clearTimeout(stallWatchdog);
-      stallWatchdog = setTimeout(() => {
-        console.warn('[CarWatchdog] Playback stalled > 3.8s, auto switching to next fast line...');
-        showGestureHud('⚡', '当前源网络缓慢，已秒切至更快的备用线路', 1.2);
-        autoSwitchToNextFastLine();
-      }, 3800);
-    });
+    // 智能防卡软解看门狗：挂接 CarMediaEngine 软解核心停滞与解码异常回调，自动无缝切到下一条最快线路
+    let lineSwitchRetries = 0;
+    if (window.CarMediaEngine) {
+      window.CarMediaEngine.onStall = (reason) => {
+        console.warn('[CarPlay] WASM watchdog onStall:', reason);
+        autoSwitchToNextFastLine(reason || '流媒体卡顿');
+      };
+      window.CarMediaEngine.onError = (err) => {
+        console.warn('[CarPlay] WASM watchdog onError:', err);
+        autoSwitchToNextFastLine('分片解码异常');
+      };
+    }
 
-    video.addEventListener('playing', () => {
-      clearTimeout(stallWatchdog);
-      updateTechStats('GPU 原生硬解 (60FPS 流畅直通)');
-    });
-
-    video.addEventListener('error', (e) => {
-      console.warn('[CarVideo] Playback error:', e);
-      clearTimeout(stallWatchdog);
-      autoSwitchToNextFastLine();
-    });
-
-    function autoSwitchToNextFastLine() {
-      if (!currentLines || currentLines.length <= 1) return;
+    function autoSwitchToNextFastLine(reason = '卡顿/超时') {
+      if (!currentLines || currentLines.length <= 1) {
+        showGestureHud('⚠️', '当前无更多可用备用源', 2.0);
+        return;
+      }
+      lineSwitchRetries++;
+      if (lineSwitchRetries > currentLines.length * 2) {
+        console.warn('[Car] All lines attempted and failed');
+        showGestureHud('⚠️', '所有软解线路均响应超时，请点击换源重试', 3.0);
+        return;
+      }
       const nextIdx = (currentLineIndex + 1) % currentLines.length;
-      console.log(`[Car] Auto switching line from ${currentLineIndex} to ${nextIdx}`);
+      console.log(`[Car] Auto switching line from ${currentLineIndex} to ${nextIdx} (原因: ${reason})`);
+      const nextLine = currentLines[nextIdx];
+      const name = getCleanLineName(nextLine);
+      showGestureHud('⚡', `检测到${reason}，秒切至【${name}】...`, 1.5);
       selectLine(nextIdx);
     }
 
@@ -1962,64 +1930,138 @@
       loadPlayLines(ep.token, currentDetail.title || '', epIdx + 1);
     }
 
-    async function loadPlayLines(token, title = '', epNum = 1) {
-      document.getElementById('btn-line-name').innerText = '解析中...';
+    function getCleanLineName(line) {
+      if (!line) return '极速';
+      let rawLabel = line.label || '极速专线';
+      return rawLabel.replace(/^⚡\s*极速秒开\s*·\s*/, '')
+                     .replace(/^★\s*4K.*?\s*·\s*/, '')
+                     .replace(/^流畅备用\s*·\s*/, '')
+                     .replace(/\s*\(.*?\)/g, '')
+                     .replace(/\[.*?\]/g, '')
+                     .replace(/\s+/g, '')
+                     .slice(0, 4) || '极速';
+    }
+
+    async function testLineLatency(line) {
+      let u = line.url || '';
+      if ((u.includes('/play/') || u.includes('/share/')) && !u.includes('.m3u8') && !u.includes('.mp4')) {
+        u = u.replace(/\/+$/, '') + '/index.m3u8';
+      }
+      let probeUrl = u;
+      if (probeUrl.startsWith('http') && !probeUrl.includes(location.host) && !probeUrl.includes('127.0.0.1') && !probeUrl.includes('/proxy?')) {
+        probeUrl = '/proxy?u=' + encodeURIComponent(probeUrl);
+      }
+      const t0 = performance.now();
+      try {
+        const ctrl = new AbortController();
+        const tid = setTimeout(() => ctrl.abort(), 1800);
+        const resp = await fetch(probeUrl, {
+          method: 'GET',
+          headers: { 'Range': 'bytes=0-512' },
+          signal: ctrl.signal
+        });
+        clearTimeout(tid);
+        if (resp.ok || resp.status === 206 || resp.status === 200) {
+          const latency = Math.max(12, Math.round(performance.now() - t0));
+          return { ...line, latency, available: true, effectiveUrl: u };
+        }
+        return { ...line, latency: 99999, available: false, effectiveUrl: u };
+      } catch (e) {
+        return { ...line, latency: 99999, available: false, effectiveUrl: u };
+      }
+    }
+
+    function renderLinesDrawer(lines) {
       const linesBody = document.getElementById('drawer-lines-body');
-      linesBody.innerHTML = '<div style="color: var(--accent-cyan); font-size: 16px; padding: 10px;">正在检索【⚡极速秒开 ➔ 1080P ➔ 4K】线路...</div>';
+      if (!linesBody) return;
+      linesBody.innerHTML = '';
+      lines.forEach((l, idx) => {
+        const btn = document.createElement('button');
+        btn.className = 'btn-car' + (idx === currentLineIndex ? ' selected' : '');
+        btn.style.width = '100%';
+        btn.style.justifyContent = 'space-between';
+        btn.style.margin = '4px 0';
+        btn.style.padding = '12px 16px';
+
+        let speedTag = '';
+        if (l.latency && l.latency < 250) {
+          speedTag = `<span style="color: #10b981; font-weight: 800;">⚡ ${l.latency}ms 极速</span>`;
+        } else if (l.latency && l.latency < 700) {
+          speedTag = `<span style="color: #00e5ff; font-weight: 800;">★ ${l.latency}ms 优选</span>`;
+        } else if (l.latency && l.latency < 5000) {
+          speedTag = `<span style="color: #f59e0b; font-weight: 800;">🟡 ${l.latency}ms 良好</span>`;
+        } else {
+          speedTag = `<span style="color: #94a3b8; font-weight: 500;">备用线路</span>`;
+        }
+
+        btn.innerHTML = `
+          <span style="font-weight: 600;">${l.label || `线路 ${idx + 1}`}</span>
+          <span style="font-size: 13px;">${speedTag}</span>
+        `;
+        btn.onclick = () => {
+          lineSwitchRetries = 0;
+          selectLine(idx);
+          closeDrawer('drawer-lines');
+        };
+        linesBody.appendChild(btn);
+      });
+    }
+
+    async function retestCurrentLines() {
+      if (!currentLines || currentLines.length === 0) return;
+      showGestureHud('⚡', '正在重新并发测速...', 1.0);
+      const linesBody = document.getElementById('drawer-lines-body');
+      linesBody.innerHTML = '<div style="color: var(--accent-cyan); font-size: 15px; padding: 10px;">正在并发测速优选极速源...</div>';
+
+      const candidateCount = Math.min(8, currentLines.length);
+      const tested = await Promise.all(currentLines.slice(0, candidateCount).map(testLineLatency));
+      const allTested = tested.concat(currentLines.slice(candidateCount).map(l => ({ ...l, latency: 99999 })));
+      allTested.sort((a, b) => (a.latency || 99999) - (b.latency || 99999));
+      currentLines = allTested;
+      renderLinesDrawer(currentLines);
+      showGestureHud('⚡', '测速完成，已按响应速度重排', 1.2);
+    }
+
+    async function loadPlayLines(token, title = '', epNum = 1) {
+      document.getElementById('btn-line-name').innerText = '测速中...';
+      const linesBody = document.getElementById('drawer-lines-body');
+      linesBody.innerHTML = '<div style="color: var(--accent-cyan); font-size: 15px; padding: 10px;">正在检索线路并并发测速中...</div>';
 
       try {
         const query = '?title=' + encodeURIComponent(title) + '&ep=' + encodeURIComponent(epNum);
         const res = await fetch('/api/car/play/' + encodeURIComponent(token) + query);
         const d = await res.json();
         if (!d.ok || !d.lines || d.lines.length === 0) {
-          linesBody.innerHTML = '<div style="color: var(--accent-red);">当前暂无可播线路，请稍后重试</div>';
+          linesBody.innerHTML = '<div style="color: var(--accent-red); padding: 10px;">当前暂无可播线路，请稍后重试</div>';
           return;
         }
 
-        currentLines = d.lines;
-        linesBody.innerHTML = '';
+        const rawLines = d.lines;
+        showGestureHud('⚡', `检索到 ${rawLines.length} 条线路，正在并发测速...`, 1.0);
 
-        currentLines.forEach((l, idx) => {
-          const btn = document.createElement('button');
-          btn.className = 'btn-car' + (idx === 0 ? ' selected' : '');
-          btn.style.width = '100%';
-          btn.style.justifyContent = 'space-between';
+        // 并发对候选线路进行快速 RTT 测速（限制单次探测 1.8s）
+        const candidateCount = Math.min(6, rawLines.length);
+        const testedCandidates = await Promise.all(rawLines.slice(0, candidateCount).map(testLineLatency));
+        const remaining = rawLines.slice(candidateCount).map(l => ({ ...l, latency: 99999 }));
+        const testedLines = testedCandidates.concat(remaining);
 
-          const is4k = l.is_4k;
-          let tagColor = '#10b981';
-          let tagText = '⚡ 极速流畅';
+        // 测速智能排序：响应时间最低的排最前
+        testedLines.sort((a, b) => (a.latency || 99999) - (b.latency || 99999));
 
-          if (is4k) {
-            tagColor = '#f59e0b';
-            tagText = '★ 4K超清(需大带宽)';
-          } else if (l.label && l.label.includes('极速秒开')) {
-            tagColor = '#00e5ff';
-            tagText = '⚡ 极速秒开 · 首选';
-          } else {
-            tagColor = '#94a3b8';
-            tagText = '1080P/标清';
-          }
+        currentLines = testedLines;
+        currentLineIndex = 0;
+        lineSwitchRetries = 0;
 
-          btn.innerHTML = `
-            <span>${l.label || `线路 ${idx + 1}`}</span>
-            <span style="font-size: 13px; color: ${tagColor}; font-weight: 800;">
-              ${tagText}
-            </span>
-          `;
-          btn.onclick = () => {
-            selectLine(idx);
-            closeDrawer('drawer-lines');
-          };
-          linesBody.appendChild(btn);
-        });
+        renderLinesDrawer(currentLines);
 
-        // 默认自动播放最高优先级第 1 条线路 (极速 1080P/720P 秒开直通源)
-        if (currentLines.length > 0) {
-          currentLineIndex = 0;
-          applyLinePlay(currentLines[0]);
-        }
+        // 自动选择并播放测速第一名（最快极速源）
+        const fastest = currentLines[0];
+        const latStr = (fastest.latency && fastest.latency < 5000) ? ` (${fastest.latency}ms)` : '';
+        showGestureHud('⚡', `优选最快极速源: ${getCleanLineName(fastest)}${latStr}`, 1.2);
+        applyLinePlay(fastest);
       } catch (e) {
-        linesBody.innerHTML = '<div style="color: var(--accent-red);">车机线路解析网络异常</div>';
+        console.error('[CarPlay] Line resolution/test error:', e);
+        linesBody.innerHTML = '<div style="color: var(--accent-red); padding: 10px;">车机线路解析网络异常</div>';
       }
     }
 
@@ -2035,16 +2077,10 @@
     }
 
     function applyLinePlay(line) {
-      let rawLabel = line.label || '极速专线';
-      let cleanName = rawLabel.replace(/^⚡\s*极速秒开\s*·\s*/, '')
-                              .replace(/^★\s*4K.*?\s*·\s*/, '')
-                              .replace(/^流畅备用\s*·\s*/, '')
-                              .replace(/\s*\(.*?\)/g, '')
-                              .replace(/\[.*?\]/g, '')
-                              .replace(/\s+/g, '')
-                              .slice(0, 4) || '极速';
+      const cleanName = getCleanLineName(line);
       const nameEl = document.getElementById('btn-line-name');
-      if (nameEl) nameEl.innerText = cleanName;
+      const latBadge = (line.latency && line.latency < 5000) ? ` ${line.latency}ms` : '';
+      if (nameEl) nameEl.innerText = cleanName + latBadge;
 
       let playUrl = line.url;
       // 自动修正网页包裹层 /play/ 或 /share/ 直达真正流媒体地址

@@ -123,6 +123,9 @@ class PcmRingBufferProcessor extends AudioWorkletProcessor {
 registerProcessor('pcm-ring-buffer-processor', PcmRingBufferProcessor);
 `;
 
+  let onStallCallback = null;
+  let onErrorCallback = null;
+
   const state = {
     mode: 'idle', // 'idle' | 'webcodecs' | 'wasm' | 'native'
     generation: 0,
@@ -174,6 +177,8 @@ registerProcessor('pcm-ring-buffer-processor', PcmRingBufferProcessor);
     wasmW: 0,
     wasmH: 0,
     lastRenderedWasmFrame: null,
+    lastRenderPerf: 0,
+    isStalled: false,
     hlsSegments: null,
     hlsCurrentSegIdx: 0,
     hlsDecoding: false,
@@ -449,6 +454,8 @@ registerProcessor('pcm-ring-buffer-processor', PcmRingBufferProcessor);
     state.paused = false;
     state.wasmFrames = null;
     state.lastRenderedWasmFrame = null;
+    state.lastRenderPerf = 0;
+    state.isStalled = false;
     state.hlsSegments = null;
     state.hlsDecoding = false;
     state.hlsCurrentSegIdx = 0;
@@ -603,6 +610,8 @@ registerProcessor('pcm-ring-buffer-processor', PcmRingBufferProcessor);
             if (!chosen && state.wasmFrames.length > 0) chosen = state.wasmFrames[0];
             if (chosen && chosen !== state.lastRenderedWasmFrame) {
               state.lastRenderedWasmFrame = chosen;
+              state.lastRenderPerf = getNowMs();
+              state.isStalled = false;
               if (glRenderer.drawRgba) {
                 glRenderer.drawRgba(chosen.data, state.wasmW, state.wasmH);
               } else if (glRenderer.draw) {
@@ -611,12 +620,22 @@ registerProcessor('pcm-ring-buffer-processor', PcmRingBufferProcessor);
               }
               const decEl = document.getElementById('stat-decoder');
               if (decEl) decEl.textContent = `FFmpeg.wasm 软解 (${curSec.toFixed(1)}s · RGBA ${state.wasmW}x${state.wasmH})`;
+            } else if (!state.paused && state.lastRenderedWasmFrame && (getNowMs() - (state.lastRenderPerf || 0) > 3500)) {
+              if (!state.isStalled) {
+                state.isStalled = true;
+                console.warn('[CarMedia] WASM 解码停滞超过 3.5s，触发换源看门狗');
+                if (typeof onStallCallback === 'function') {
+                  onStallCallback('解码停滞');
+                }
+              }
             }
           } else {
-            const fps = 20;
+            const fps = 24;
             const frameIdx = Math.min(state.wasmFrames.length - 1, Math.max(0, Math.floor(curSec * fps)));
             if (frameIdx !== state.wasmFrameIdx && state.wasmFrames[frameIdx]) {
               state.wasmFrameIdx = frameIdx;
+              state.lastRenderPerf = getNowMs();
+              state.isStalled = false;
               const frameData = state.wasmFrames[frameIdx];
               if (glRenderer.drawRgba) {
                 glRenderer.drawRgba(frameData, state.wasmW, state.wasmH);
@@ -629,7 +648,7 @@ registerProcessor('pcm-ring-buffer-processor', PcmRingBufferProcessor);
                 }).catch(() => {});
               }
               const decEl = document.getElementById('stat-decoder');
-              if (decEl) decEl.textContent = `FFmpeg.wasm 软解 (第 ${frameIdx + 1}/${state.wasmFrames.length} 帧 RGBA)`;
+              if (decEl) decEl.textContent = `FFmpeg.wasm 软解 (第 ${frameIdx + 1}/${state.wasmFrames.length} 帧 RGBA ${state.wasmW}x${state.wasmH})`;
             }
           }
         }
@@ -975,7 +994,7 @@ registerProcessor('pcm-ring-buffer-processor', PcmRingBufferProcessor);
     status('WASM 逐帧软解与 PCM 抽取中…', 'wasm');
 
     // 1. 抽取音频至 Float32 PCM (48kHz, 双声道)
-    const maxDecodeSec = 20; // 限制单次逐帧软解安全窗口，杜绝原始未压缩像素撑爆 Emscripten 2GB 内存
+    const maxDecodeSec = 6; // 限制测试片源逐帧软解安全窗口，杜绝原始未压缩像素撑爆 Emscripten 2GB 内存
     try {
       await ffmpeg.exec(['-t', String(maxDecodeSec), '-i', 'source.mp4', '-vn', '-f', 'f32le', '-ac', '2', '-ar', '48000', 'audio.pcm']);
       const pcmRaw = await ffmpeg.readFile('audio.pcm');
@@ -1007,10 +1026,10 @@ registerProcessor('pcm-ring-buffer-processor', PcmRingBufferProcessor);
       console.warn('[CarMedia] WASM audio extraction skipped:', e);
     }
 
-    // 2. 逐帧解码视频至 rawvideo RGBA (车载最佳黄金能效比 640x360，搭配 WebGL GPU 杜比着色器平滑放大至全屏)
-    // 采用 640x360 @ 20fps，内存占用骤降 56%，CPU 计算负载直降 65%，杜绝车机内存溢出崩溃与卡顿
-    const targetW = 640, targetH = 360;
-    const fps = 20;
+    // 2. 逐帧解码视频至 rawvideo RGBA (车载高清 1280x720 720P @ 24fps)
+    // 配合 WebGL GPU 杜比着色器平滑全屏渲染，画质清澈细腻，杜绝模糊
+    const targetW = 1280, targetH = 720;
+    const fps = 24;
     await ffmpeg.exec([
       '-y',
       '-skip_loop_filter', 'all',
@@ -1252,7 +1271,10 @@ registerProcessor('pcm-ring-buffer-processor', PcmRingBufferProcessor);
     const seg = state.hlsSegments[segIdx];
     const fetchPromise = (async () => {
       try {
-        const res = await fetch(seg.url);
+        const ctrl = new AbortController();
+        const tid = setTimeout(() => ctrl.abort(), 8500);
+        const res = await fetch(seg.url, { signal: ctrl.signal });
+        clearTimeout(tid);
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const buf = await res.arrayBuffer();
         return new Uint8Array(buf);
@@ -1268,7 +1290,7 @@ registerProcessor('pcm-ring-buffer-processor', PcmRingBufferProcessor);
   async function decodeHlsSegment(segIdx, generation) {
     if (generation !== state.generation || !state.hlsSegments || segIdx >= state.hlsSegments.length) return false;
     const seg = state.hlsSegments[segIdx];
-    status(`FFmpeg.wasm 软解分片 ${segIdx + 1}/${state.hlsSegments.length}…`, 'wasm');
+    status(`FFmpeg.wasm 720P 软解分片 ${segIdx + 1}/${state.hlsSegments.length}…`, 'wasm');
 
     // 立即发起后续 2 个分片的后台并行异步预拉取，网络 IO 与 WASM 计算完全重叠并发
     prefetchSegment(segIdx + 1, generation);
@@ -1281,7 +1303,10 @@ registerProcessor('pcm-ring-buffer-processor', PcmRingBufferProcessor);
         segPrefetchMap.delete(segIdx);
       }
       if (!segBytes) {
-        const res = await fetch(seg.url);
+        const ctrl = new AbortController();
+        const tid = setTimeout(() => ctrl.abort(), 8500);
+        const res = await fetch(seg.url, { signal: ctrl.signal });
+        clearTimeout(tid);
         if (!res.ok) throw new Error(`切片下载失败 HTTP ${res.status}`);
         segBytes = new Uint8Array(await res.arrayBuffer());
       }
@@ -1309,9 +1334,10 @@ registerProcessor('pcm-ring-buffer-processor', PcmRingBufferProcessor);
       await ffmpeg.writeFile('seg.ts', segBytes);
       segBytes = null; // 释放引用以回收内存
 
-      const targetW = state.wasmW || 640;
-      const targetH = state.wasmH || 360;
-      const fps = 20;
+      // 720P 软解高清规格: 1280x720 @ 24fps
+      const targetW = state.wasmW || 1280;
+      const targetH = state.wasmH || 720;
+      const fps = 24;
 
       // 单 pass 极速硬件级软解：在 -i 之前开启 -skip_loop_filter all 与 -flags2 +fast，跳过去块效应滤波，CPU 解码耗时暴跌 70%
       let execOk = false;
@@ -1435,6 +1461,7 @@ registerProcessor('pcm-ring-buffer-processor', PcmRingBufferProcessor);
   async function pipelineHlsSegments(generation) {
     if (state.hlsDecoding || generation !== state.generation || state.mode !== 'wasm') return;
     state.hlsDecoding = true;
+    let consecutiveFails = 0;
 
     try {
       while (generation === state.generation && state.mode === 'wasm' && state.hlsSegments) {
@@ -1446,16 +1473,27 @@ registerProcessor('pcm-ring-buffer-processor', PcmRingBufferProcessor);
           }
         }
 
-        // 动态维持 40-50 帧 (约 2-2.5 秒) 前瞻缓冲池，低于 40 帧自动唤醒后台解码
-        if (futureFrames < 40 && state.hlsCurrentSegIdx < state.hlsSegments.length) {
-          await decodeHlsSegment(state.hlsCurrentSegIdx, generation);
+        // 720P 高清缓冲池：维持 20-28 帧 (约 1-1.2 秒) 前瞻缓冲，避免瞬间内存峰值
+        if (futureFrames < 22 && state.hlsCurrentSegIdx < state.hlsSegments.length) {
+          const segOk = await decodeHlsSegment(state.hlsCurrentSegIdx, generation);
+          if (!segOk) {
+            consecutiveFails++;
+            if (consecutiveFails >= 2) {
+              console.warn('[CarMedia] 连续分片软解失败，触发换源看门狗');
+              if (typeof onStallCallback === 'function') {
+                onStallCallback('切片连续解码失败');
+              }
+            }
+          } else {
+            consecutiveFails = 0;
+          }
         } else {
-          await new Promise(r => setTimeout(r, 100));
+          await new Promise(r => setTimeout(r, 60));
         }
 
-        // 及时释放播放时间点 0.3 秒以前的历史帧，使常驻内存严格低于 45MB，杜绝 OOM
+        // 及时释放播放时间点 0.25 秒以前的历史帧，使常驻内存严格稳定受控，杜绝 OOM
         if (state.wasmFrames && state.wasmFrames.length > 0) {
-          while (state.wasmFrames.length > 10 && state.wasmFrames[0].time < curTime - 0.3) {
+          while (state.wasmFrames.length > 6 && state.wasmFrames[0].time < curTime - 0.25) {
             const evicted = state.wasmFrames.shift();
             evicted.data = null;
           }
@@ -1481,8 +1519,8 @@ registerProcessor('pcm-ring-buffer-processor', PcmRingBufferProcessor);
     state.hlsCurrentSegIdx = 0;
     state.duration = totalSec;
     state.wasmFrames = [];
-    // 黄金能效比：640x360 @ 20fps，搭配 WebGL 杜比着色器 GPU 平滑全屏插值，既流畅又轻巧，杜绝 OOM 崩溃
-    const targetW = 640, targetH = 360;
+    // 车载高清标准：提升至 1280x720 (720P @ 24fps)，画质细腻清晰，配合 WebGL 2.0 着色器呈现高保真 720P 视觉效果
+    const targetW = 1280, targetH = 720;
     state.wasmW = targetW;
     state.wasmH = targetH;
     state.wasmFrameIdx = -1;
@@ -1502,26 +1540,32 @@ registerProcessor('pcm-ring-buffer-processor', PcmRingBufferProcessor);
       } catch (_) {}
     }
 
-    // 预缓冲充能前 2 个分片 (建立 6~8 秒健康的水位线，彻底避免开播后因追赶解码导致的断续卡顿)
-    const initialPrebuffer = Math.min(2, segments.length);
+    // 预缓冲充能首个分片 (建立 3~5 秒安全水位线，秒开出画同时后台启动持续前瞻管道)
+    const firstSegDur = segments[0] ? (segments[0].duration || 4.0) : 4.0;
+    const initialPrebuffer = firstSegDur >= 3.0 ? 1 : Math.min(2, segments.length);
     for (let i = 0; i < initialPrebuffer; i++) {
-      status(`WASM 软解预充流 (${i + 1}/${initialPrebuffer})…`, 'wasm');
-      await decodeHlsSegment(i, generation);
+      status(`WASM 720P 软解预充流 (${i + 1}/${initialPrebuffer})…`, 'wasm');
+      const ok = await decodeHlsSegment(i, generation);
+      if (!ok && i === 0) {
+        throw new Error('首片软解失败');
+      }
       if (generation !== state.generation) return false;
     }
 
     // 立即上屏首帧
     if (state.wasmFrames && state.wasmFrames.length > 0) {
       state.lastRenderedWasmFrame = state.wasmFrames[0];
+      state.lastRenderPerf = getNowMs();
+      state.isStalled = false;
       if (glRenderer.drawRgba) {
         glRenderer.drawRgba(state.wasmFrames[0].data, targetW, targetH);
       }
     }
 
-    status('FFmpeg.wasm 逐帧软解 (RGBA ➔ Canvas/WebGL + AudioWorklet PCM)', 'wasm');
+    status('FFmpeg.wasm 逐帧软解 (720P RGBA ➔ Canvas/WebGL + AudioWorklet PCM)', 'wasm');
     startClock(canvas, glRenderer, generation);
 
-    // 开启后台持续前瞻软解管道 (维持 40-50 帧前瞻缓冲池)
+    // 开启后台持续前瞻软解管道 (维持 20-28 帧前瞻缓冲池)
     pipelineHlsSegments(generation);
     return true;
   }
@@ -1689,6 +1733,10 @@ registerProcessor('pcm-ring-buffer-processor', PcmRingBufferProcessor);
     get currentTime() { return getCurrentTime(); },
     get duration() { return state.duration; },
     get paused() { return state.paused; },
-    get playbackRate() { return state.playbackRate; }
+    get playbackRate() { return state.playbackRate; },
+    set onStall(fn) { onStallCallback = fn; },
+    get onStall() { return onStallCallback; },
+    set onError(fn) { onErrorCallback = fn; },
+    get onError() { return onErrorCallback; }
   };
 })();
