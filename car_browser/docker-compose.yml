@@ -1,0 +1,25 @@
+version: "3.8"
+
+services:
+  car_browser:
+    image: lscr.io/linuxserver/chromium:latest
+    container_name: car_browser
+    restart: always
+    privileged: true
+    shm_size: "1gb"
+    environment:
+      - PUID=1000
+      - PGID=1000
+      - TZ=Asia/Shanghai
+      # Kiosk 沉浸式全屏亭台模式：隐藏一切桌面窗口与地址栏，触控开箱即看剧
+      # CAR_URL 可在 .env 中自定义，默认直连宿主机上的 juchang8 服务 (8077 端口)
+      - CHROME_CLI=--kiosk --no-first-run --no-default-browser-check --autoplay-policy=no-user-gesture-required --disable-dev-shm-usage ${CAR_URL:-http://host.docker.internal:8077/car}
+    extra_hosts:
+      # 直连宿主机 8077 端口，完全与 juchang8 容器解耦，无需依赖相同的 Docker 网络
+      - "host.docker.internal:host-gateway"
+    ports:
+      # 车机访问端口 (单个 TCP 端口即可同时承载 WebSocket Canvas 画面与 Web Audio 声音)
+      - "3000:3000"
+    volumes:
+      # 独立数据目录：保存浏览器登录态、缓存与配置，不干扰根目录任何业务数据
+      - ./data:/config
