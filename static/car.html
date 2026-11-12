@@ -1300,6 +1300,7 @@
     let lastRenderedPts = -1;
     let playbackStartPerfMs = 0;
     let hasRenderedAnyVideoFrame = false;
+    let audioHasPlayed = false;
     let scheme3WatchdogTimer = null;
 
     function resetScheme3Watchdog() {
@@ -1400,17 +1401,16 @@
                   if (typeof bmp.close === 'function') bmp.close();
                   return;
                 }
-                // 首帧瞬间上屏直出，零等待！
+                // 首帧瞬间上屏作为静态封面呈现，零等待！
                 if (!hasRenderedAnyVideoFrame) {
                   hasRenderedAnyVideoFrame = true;
                   lastRenderedPts = pts;
-                  playbackStartPerfMs = performance.now() - Math.max(0, (pts - streamStartOffset)) * 1000;
                   carFrameRenderer.resize(bmp.width, bmp.height);
                   carFrameRenderer.draw(bmp);
                   showGestureHud('⚡', '极速就绪', 0.5);
                 }
                 frameQueue.push({ pts, bitmap: bmp });
-                if (frameQueue.length > 30) {
+                if (frameQueue.length > 40) {
                   const dropped = frameQueue.shift();
                   if (dropped.bitmap && typeof dropped.bitmap.close === 'function') dropped.bitmap.close();
                 }
@@ -1424,12 +1424,14 @@
                 if (!hasRenderedAnyVideoFrame) {
                   hasRenderedAnyVideoFrame = true;
                   lastRenderedPts = pts;
-                  playbackStartPerfMs = performance.now() - Math.max(0, (pts - streamStartOffset)) * 1000;
                   carFrameRenderer.resize(img.width || 1280, img.height || 720);
                   carFrameRenderer.draw(img);
                   showGestureHud('⚡', '极速就绪', 0.5);
                 }
                 frameQueue.push({ pts, bitmap: img });
+                if (frameQueue.length > 40) {
+                  frameQueue.shift();
+                }
               };
               img.src = objUrl;
             }
@@ -1450,7 +1452,7 @@
       }
     }
 
-    // 逐帧渲染主循环：以车机底层硬件声卡 DAC 为主时钟，辅以高精度虚拟时钟，绝对零黑屏与零卡顿
+    // 逐帧渲染主循环：以车机底层硬件声卡 DAC 为主时钟，音画毫秒同步 + 节拍平滑抗抖
     function renderFrameLoop() {
       if (renderLoopStarted) return;
       renderLoopStarted = true;
@@ -1461,35 +1463,47 @@
           updateProgress();
           frameCount++;
         } else {
-          // 方案三：双时钟毫秒同步渲染 (音频正常时以声卡为主；音频缓冲或待解锁时以高精度虚拟时钟推进)
+          // 方案三：声卡 DAC 硬件绝对时钟对齐
           const isAudioActive = audio && !audio.paused && !audio.ended && (audio.currentTime > 0);
+          if (isAudioActive) {
+            audioHasPlayed = true;
+          }
+
           let curTime = 0;
           if (isAudioActive) {
+            // 音频已出声：以声卡为唯一主基准，保证绝对零漂移
             curTime = streamStartOffset + audio.currentTime;
-          } else if (playbackStartPerfMs > 0) {
-            curTime = streamStartOffset + Math.max(0, (performance.now() - playbackStartPerfMs) / 1000);
+          } else if (audioHasPlayed && audio && audio.paused) {
+            // 用户点击暂停：定格画面
+            curTime = streamStartOffset + (audio.currentTime || 0);
+          } else {
+            // 音频尚未出声（网络缓冲中或被系统拦截自动播放）：
+            // 若 1.6 秒后仍未出声，说明被车载自动播放策略拦截，启动虚拟系统时钟推进，绝不黑屏卡死！
+            if (!playbackStartPerfMs && frameQueue.length >= 2) {
+              playbackStartPerfMs = performance.now();
+            }
+            if (playbackStartPerfMs && (performance.now() - playbackStartPerfMs > 1600)) {
+              curTime = streamStartOffset + Math.max(0, (performance.now() - playbackStartPerfMs - 1600) / 1000);
+            } else {
+              // 等待音频就绪中：保持首帧静态封面，绝不提前跑掉导致音画不同步！
+              curTime = 0;
+            }
           }
 
           if (curTime > 0) {
             updateProgress();
-          }
 
-          if (frameQueue.length > 0) {
-            if (curTime === 0) {
-              playbackStartPerfMs = performance.now();
-              curTime = frameQueue[0].pts;
-            }
-
-            // 淘汰落后当前播放时间 100ms 以上的陈旧帧，保证音画绝不脱节
-            while (frameQueue.length > 1 && frameQueue[0].pts < curTime - 0.10) {
+            // 1. 淘汰落后音频时间 80ms 以上的陈旧帧，保证音画绝不脱节
+            while (frameQueue.length > 1 && frameQueue[0].pts < curTime - 0.08) {
               const old = frameQueue.shift();
               if (old.bitmap && typeof old.bitmap.close === 'function') old.bitmap.close();
             }
 
+            // 2. 平滑节拍控制：单次刷新仅出 1 帧，且必须到达帧时间戳（单帧 25ms 容差）
+            // 杜绝突发连画多帧导致缓存耗尽引发的周期性微卡顿！
             if (frameQueue.length > 0) {
               const candidate = frameQueue[0];
-              // 提前 120ms 容差平滑呈现
-              if (candidate.pts <= curTime + 0.12) {
+              if (candidate.pts <= curTime + 0.025) {
                 const f = frameQueue.shift();
                 const bmp = f.bitmap;
                 if (bmp) {
@@ -1512,7 +1526,7 @@
           frameCount = 0;
           lastFpsTs = now;
           const fpsEl = document.getElementById('stat-fps');
-          if (fpsEl) fpsEl.innerText = `${currentFps > 0 ? currentFps : '25.0'} FPS`;
+          if (fpsEl) fpsEl.innerText = `${currentFps > 0 ? currentFps : '20.0'} FPS`;
         }
 
         requestAnimationFrame(tick);
@@ -1988,7 +2002,8 @@
       streamStartOffset = startSec;
       lastRenderedPts = -1;
       hasRenderedAnyVideoFrame = false;
-      playbackStartPerfMs = performance.now();
+      audioHasPlayed = false;
+      playbackStartPerfMs = 0;
 
       renderFrameLoop();
 
@@ -2017,7 +2032,7 @@
       const rendEl = document.getElementById('stat-renderer');
       if (rendEl) rendEl.innerText = (activeColorMode === 0) ? 'WebGL 2.0 (服务端极速帧流 · BT.709)' : 'WebGL 2.0 (杜比校色增强)';
       const fpsEl = document.getElementById('stat-fps');
-      if (fpsEl) fpsEl.innerText = '25.0 FPS';
+      if (fpsEl) fpsEl.innerText = '20.0 FPS';
     }
 
     // 智能防卡软解看门狗：挂接 CarMediaEngine 软解核心停滞与解码异常回调，自动无缝切到下一条最快线路
