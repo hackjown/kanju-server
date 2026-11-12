@@ -744,6 +744,8 @@
             <span id="stat-audio" style="display:none">WebAudio</span>
             <span id="stat-colormode" style="display:none">原色直出</span>
           </div>
+          <!-- 声音解锁提示按钮 (当浏览器拦截自动播放时显示) -->
+          <button class="btn-car" id="btn-audio-unlock" onclick="unlockAudio()" style="display: none; background: #eab308; color: #000; font-weight: bold; padding: 6px 12px; font-size: 13px;" title="点击开启声音">🔊 开启声音</button>
           <!-- 顶栏专属全屏快捷按钮：分屏模式下永不被挤压，一触即大！ -->
           <button class="btn-car primary btn-fullscreen" id="btn-top-fullscreen" onclick="toggleFullscreen()" style="padding: 6px 14px; font-size: 13px;" title="进入/退出全屏">⛶ 全屏</button>
         </div>
@@ -1296,12 +1298,47 @@
     let currentMediaDuration = 0;
     let targetQuality = "720p";
     let lastRenderedPts = -1;
+    let playbackStartPerfMs = 0;
+    let hasRenderedAnyVideoFrame = false;
+    let scheme3WatchdogTimer = null;
+
+    function resetScheme3Watchdog() {
+      clearTimeout(scheme3WatchdogTimer);
+      scheme3WatchdogTimer = setTimeout(() => {
+        if (document.getElementById('player-view').style.display === 'block') {
+          console.warn('[Stream3] Watchdog timeout: no video chunk for 6.5s, auto switching');
+          autoSwitchToNextFastLine('推流超时');
+        }
+      }, 6500);
+    }
+
+    function unlockAudio() {
+      if (audioCtx && audioCtx.state === 'suspended') {
+        audioCtx.resume().catch(() => {});
+      }
+      if (audio) {
+        audio.play().then(() => {
+          const btn = document.getElementById('btn-audio-unlock');
+          if (btn) btn.style.display = 'none';
+          showGestureHud('🔊', '声音已开启', 1.0);
+        }).catch(e => {
+          console.warn('[Audio] unlock retry failed:', e);
+        });
+      }
+    }
 
     // 二进制流读取器：从 /car_stream/video 读取 12-byte JGFR 报文并毫秒级解码为 ImageBitmap
     async function pumpVideoStream(url, signal) {
+      resetScheme3Watchdog();
       try {
         const resp = await fetch(url, { signal });
-        if (!resp.ok || !resp.body) return;
+        if (!resp.ok || !resp.body) {
+          if (!signal.aborted) {
+            console.warn('[Stream3] fetch failed with status:', resp.status);
+            autoSwitchToNextFastLine('推流响应错误 ' + resp.status);
+          }
+          return;
+        }
         const reader = resp.body.getReader();
         let chunks = [];
         let totalLen = 0;
@@ -1309,6 +1346,7 @@
         while (!signal.aborted) {
           const { done, value } = await reader.read();
           if (done) break;
+          resetScheme3Watchdog();
           chunks.push(value);
           totalLen += value.length;
 
@@ -1352,14 +1390,23 @@
             const blob = new Blob([jpegBytes], { type: 'image/jpeg' });
             if (window.createImageBitmap) {
               createImageBitmap(blob).then(bmp => {
-                if (!signal.aborted) {
-                  frameQueue.push({ pts, bitmap: bmp });
-                  if (frameQueue.length > 30) {
-                    const dropped = frameQueue.shift();
-                    if (dropped.bitmap && typeof dropped.bitmap.close === 'function') dropped.bitmap.close();
-                  }
-                } else if (typeof bmp.close === 'function') {
-                  bmp.close();
+                if (signal.aborted) {
+                  if (typeof bmp.close === 'function') bmp.close();
+                  return;
+                }
+                // 首帧瞬间上屏直出，零等待！
+                if (!hasRenderedAnyVideoFrame) {
+                  hasRenderedAnyVideoFrame = true;
+                  lastRenderedPts = pts;
+                  playbackStartPerfMs = performance.now() - Math.max(0, (pts - streamStartOffset)) * 1000;
+                  carFrameRenderer.resize(bmp.width, bmp.height);
+                  carFrameRenderer.draw(bmp);
+                  showGestureHud('⚡', '极速就绪', 0.5);
+                }
+                frameQueue.push({ pts, bitmap: bmp });
+                if (frameQueue.length > 30) {
+                  const dropped = frameQueue.shift();
+                  if (dropped.bitmap && typeof dropped.bitmap.close === 'function') dropped.bitmap.close();
                 }
               }).catch(() => {});
             } else {
@@ -1367,9 +1414,16 @@
               const objUrl = URL.createObjectURL(blob);
               img.onload = () => {
                 URL.revokeObjectURL(objUrl);
-                if (!signal.aborted) {
-                  frameQueue.push({ pts, bitmap: img });
+                if (signal.aborted) return;
+                if (!hasRenderedAnyVideoFrame) {
+                  hasRenderedAnyVideoFrame = true;
+                  lastRenderedPts = pts;
+                  playbackStartPerfMs = performance.now() - Math.max(0, (pts - streamStartOffset)) * 1000;
+                  carFrameRenderer.resize(img.width || 1280, img.height || 720);
+                  carFrameRenderer.draw(img);
+                  showGestureHud('⚡', '极速就绪', 0.5);
                 }
+                frameQueue.push({ pts, bitmap: img });
               };
               img.src = objUrl;
             }
@@ -1383,11 +1437,14 @@
       } catch (err) {
         if (err.name !== 'AbortError') {
           console.warn('[Stream3] pump error:', err);
+          if (!signal.aborted) {
+            autoSwitchToNextFastLine('推流网络断开');
+          }
         }
       }
     }
 
-    // 逐帧渲染主循环：以车机底层硬件声卡 DAC 为主时钟，绝对零漂移与零卡顿
+    // 逐帧渲染主循环：以车机底层硬件声卡 DAC 为主时钟，辅以高精度虚拟时钟，绝对零黑屏与零卡顿
     function renderFrameLoop() {
       if (renderLoopStarted) return;
       renderLoopStarted = true;
@@ -1397,36 +1454,46 @@
         if (isWasmEngineActive && window.CarMediaEngine.hasActiveStream) {
           updateProgress();
           frameCount++;
-        } else if (audio && !audio.paused && !audio.ended) {
-          updateProgress();
-          frameCount++;
+        } else {
+          // 方案三：双时钟毫秒同步渲染 (音频正常时以声卡为主；音频缓冲或待解锁时以高精度虚拟时钟推进)
+          const isAudioActive = audio && !audio.paused && !audio.ended && (audio.currentTime > 0);
+          let curTime = 0;
+          if (isAudioActive) {
+            curTime = streamStartOffset + audio.currentTime;
+          } else if (playbackStartPerfMs > 0) {
+            curTime = streamStartOffset + Math.max(0, (performance.now() - playbackStartPerfMs) / 1000);
+          }
 
-          const curTime = streamStartOffset + (audio.currentTime || 0);
-
-          // 淘汰落后音频时间 80ms 以上的陈旧帧，保证音画绝不脱节
-          while (frameQueue.length > 1 && frameQueue[0].pts < curTime - 0.08) {
-            const old = frameQueue.shift();
-            if (old.bitmap && typeof old.bitmap.close === 'function') old.bitmap.close();
+          if (curTime > 0) {
+            updateProgress();
           }
 
           if (frameQueue.length > 0) {
-            const candidate = frameQueue[0];
-            if (candidate.pts <= curTime + 0.12) {
-              const f = frameQueue.shift();
-              const bmp = f.bitmap;
-              if (bmp) {
-                const w = bmp.width;
-                const h = bmp.height;
-                if (canvas.width !== w || canvas.height !== h) {
-                  canvas.width = w;
-                  canvas.height = h;
-                  if (isWebGl && gl) {
-                    gl.viewport(0, 0, w, h);
-                  }
+            if (curTime === 0) {
+              playbackStartPerfMs = performance.now();
+              curTime = frameQueue[0].pts;
+            }
+
+            // 淘汰落后当前播放时间 100ms 以上的陈旧帧，保证音画绝不脱节
+            while (frameQueue.length > 1 && frameQueue[0].pts < curTime - 0.10) {
+              const old = frameQueue.shift();
+              if (old.bitmap && typeof old.bitmap.close === 'function') old.bitmap.close();
+            }
+
+            if (frameQueue.length > 0) {
+              const candidate = frameQueue[0];
+              // 提前 120ms 容差平滑呈现
+              if (candidate.pts <= curTime + 0.12) {
+                const f = frameQueue.shift();
+                const bmp = f.bitmap;
+                if (bmp) {
+                  carFrameRenderer.resize(bmp.width, bmp.height);
+                  carFrameRenderer.draw(bmp);
+                  if (typeof bmp.close === 'function') bmp.close();
+                  lastRenderedPts = f.pts;
+                  frameCount++;
+                  hasRenderedAnyVideoFrame = true;
                 }
-                carFrameRenderer.draw(bmp);
-                if (typeof bmp.close === 'function') bmp.close();
-                lastRenderedPts = f.pts;
               }
             }
           }
@@ -1633,6 +1700,15 @@
     let gestureHudTimer = null;
 
     touchSurface.addEventListener('touchstart', (e) => {
+      if (audioCtx && audioCtx.state === 'suspended') {
+        audioCtx.resume().catch(() => {});
+      }
+      if (audio && audio.paused && hasRenderedAnyVideoFrame) {
+        audio.play().then(() => {
+          const btn = document.getElementById('btn-audio-unlock');
+          if (btn) btn.style.display = 'none';
+        }).catch(() => {});
+      }
       if (e.touches.length !== 1) return;
       isTouching = true;
       touchStartX = e.touches[0].clientX;
@@ -1689,6 +1765,7 @@
     // 双击播放 / 暂停
     let lastTap = 0;
     touchSurface.addEventListener('click', (e) => {
+      unlockAudio();
       const now = Date.now();
       if (now - lastTap < 300) {
         togglePlayPause();
@@ -1734,14 +1811,19 @@
     // 6. 播放器核心控制逻辑 (换线、选集、倍速、解析)
     // ========================================================
     function getMediaCurrentTime() {
-      if (window.CarMediaEngine && window.CarMediaEngine.mode !== 'native' && window.CarMediaEngine.mode !== 'idle') {
+      if (window.CarMediaEngine && (window.CarMediaEngine.mode === 'wasm' || window.CarMediaEngine.mode === 'webcodecs') && window.CarMediaEngine.hasActiveStream) {
         return window.CarMediaEngine.currentTime;
       }
-      return video.currentTime || 0;
-    }
-
-    function getMediaCurrentTime() {
-      return streamStartOffset + (audio.currentTime || 0);
+      if (audio && !audio.paused && audio.currentTime > 0) {
+        return streamStartOffset + audio.currentTime;
+      }
+      if (lastRenderedPts > 0) {
+        return lastRenderedPts;
+      }
+      if (playbackStartPerfMs > 0) {
+        return streamStartOffset + Math.max(0, (performance.now() - playbackStartPerfMs) / 1000);
+      }
+      return streamStartOffset;
     }
 
     function getMediaDuration() {
@@ -1836,7 +1918,7 @@
       const qBtn = document.getElementById('btn-quality');
       if (qBtn) qBtn.innerText = `📺 ${targetQuality.toUpperCase()}`;
       showGestureHud('📺', `已切换至 ${targetQuality.toUpperCase()} 模式`, 0.7);
-      if (currentStreamUrl && !audio.paused) {
+      if (currentStreamUrl) {
         const cur = getMediaCurrentTime();
         startScheme3Playback(currentStreamUrl, cur);
       }
@@ -1891,6 +1973,7 @@
         videoAbortCtrl.abort();
         videoAbortCtrl = null;
       }
+      clearTimeout(scheme3WatchdogTimer);
       frameQueue.forEach(f => {
         if (f.bitmap && typeof f.bitmap.close === 'function') f.bitmap.close();
       });
@@ -1898,12 +1981,23 @@
 
       streamStartOffset = startSec;
       lastRenderedPts = -1;
+      hasRenderedAnyVideoFrame = false;
+      playbackStartPerfMs = performance.now();
+
+      renderFrameLoop();
 
       // 启动标准 HTML5 Audio 播放 (零视频检测风险)
       audio.src = `/car_stream/audio?u=${encodeURIComponent(url)}&ss=${startSec}`;
       audio.currentTime = 0;
       audio.playbackRate = currentPlaybackRate || 1.0;
-      audio.play().catch(e => console.warn('[Audio] play error:', e));
+      audio.play().then(() => {
+        const btnAudioUnlock = document.getElementById('btn-audio-unlock');
+        if (btnAudioUnlock) btnAudioUnlock.style.display = 'none';
+      }).catch(e => {
+        console.warn('[Audio] autoplay restricted:', e);
+        const btnAudioUnlock = document.getElementById('btn-audio-unlock');
+        if (btnAudioUnlock) btnAudioUnlock.style.display = 'inline-flex';
+      });
 
       // 启动极速视频帧流
       const ctrl = new AbortController();

@@ -817,6 +817,44 @@ def _find_bin(name):
     return name
 
 
+def _resolve_stream_target(raw_u):
+    """把 /proxy?u=... 彻底还原为目标真实 URL，并生成反盗链请求头，杜绝本地死锁回环"""
+    u = (raw_u or "").strip()
+    while "/proxy?" in u:
+        parsed = urllib.parse.urlparse(u)
+        qs = urllib.parse.parse_qs(parsed.query)
+        if "u" in qs and qs["u"]:
+            u = qs["u"][0].strip()
+        else:
+            break
+
+    if u.startswith("//"):
+        u = "https:" + u
+
+    pu = urllib.parse.urlparse(u)
+    headers = [
+        f"User-Agent: {UA}",
+    ]
+    ref = pu.scheme + "://" + pu.netloc + "/" if pu.netloc else ""
+    if ref:
+        headers.append(f"Referer: {ref}")
+        headers.append(f"Origin: {ref.rstrip('/')}")
+
+    if pu.netloc and ("115.com" in pu.netloc or "115cdn" in pu.netloc or "cpats" in pu.netloc):
+        try:
+            ck = KPAN.get_active_pan_cookie("115")
+            if ck: headers.append(f"Cookie: {ck}")
+        except Exception: pass
+    elif pu.netloc and "quark" in pu.netloc:
+        try:
+            ck = KPAN.get_active_pan_cookie("quark")
+            if ck: headers.append(f"Cookie: {ck}")
+        except Exception: pass
+
+    header_str = "\r\n".join(headers) + "\r\n"
+    return u, header_str
+
+
 @app.route("/car_stream/duration", methods=["GET"])
 def car_stream_duration():
     """快速获取视频真实时长，支持前端精确进度条与拖拽跳转"""
@@ -826,20 +864,18 @@ def car_stream_duration():
     if raw_u in _car_duration_cache:
         return jsonify({"ok": True, "duration": _car_duration_cache[raw_u]})
 
-    probe_target = raw_u
-    if raw_u.startswith("http") and not raw_u.startswith("http://127.0.0.1") and "/proxy" not in raw_u:
-        probe_target = f"http://127.0.0.1:8077/proxy?u={urllib.parse.quote(raw_u)}"
-    elif raw_u.startswith("/proxy"):
-        probe_target = f"http://127.0.0.1:8077{raw_u}"
-
+    target, header_str = _resolve_stream_target(raw_u)
     try:
-        cmd = [
-            _find_bin("ffprobe"), "-v", "error",
+        cmd = [_find_bin("ffprobe"), "-v", "error"]
+        if target.startswith("http://") or target.startswith("https://"):
+            cmd += ["-headers", header_str]
+        cmd += [
+            "-analyzeduration", "1000000", "-probesize", "1000000",
             "-show_entries", "format=duration",
             "-of", "default=noprint_wrappers=1:nokey=1",
-            probe_target
+            target
         ]
-        res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=12)
+        res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=8)
         dur = float(res.stdout.strip())
         _car_duration_cache[raw_u] = dur
         return jsonify({"ok": True, "duration": dur})
@@ -858,13 +894,12 @@ def car_stream_audio():
     except Exception:
         ss = 0.0
 
-    target = raw_u
-    if raw_u.startswith("http") and not raw_u.startswith("http://127.0.0.1") and "/proxy" not in raw_u:
-        target = f"http://127.0.0.1:8077/proxy?u={urllib.parse.quote(raw_u)}"
-    elif raw_u.startswith("/proxy"):
-        target = f"http://127.0.0.1:8077{raw_u}"
+    target, header_str = _resolve_stream_target(raw_u)
 
     cmd = [_find_bin("ffmpeg"), "-nostdin", "-loglevel", "error"]
+    if target.startswith("http://") or target.startswith("https://"):
+        cmd += ["-headers", header_str]
+    cmd += ["-analyzeduration", "1000000", "-probesize", "1000000"]
     if ss > 0:
         cmd += ["-ss", str(ss)]
     cmd += [
@@ -876,12 +911,13 @@ def car_stream_audio():
         "pipe:1"
     ]
 
-    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, bufsize=65536)
+    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, bufsize=0)
 
     def gen():
+        read_fn = getattr(proc.stdout, "read1", proc.stdout.read)
         try:
             while True:
-                chunk = proc.stdout.read(16384)
+                chunk = read_fn(16384)
                 if not chunk:
                     break
                 yield chunk
@@ -918,17 +954,17 @@ def car_stream_video():
         scale = "scale=-2:720"
         q_val = "5"
 
-    target = raw_u
-    if raw_u.startswith("http") and not raw_u.startswith("http://127.0.0.1") and "/proxy" not in raw_u:
-        target = f"http://127.0.0.1:8077/proxy?u={urllib.parse.quote(raw_u)}"
-    elif raw_u.startswith("/proxy"):
-        target = f"http://127.0.0.1:8077{raw_u}"
+    target, header_str = _resolve_stream_target(raw_u)
 
     cmd = [_find_bin("ffmpeg"), "-nostdin", "-loglevel", "error"]
+    if target.startswith("http://") or target.startswith("https://"):
+        cmd += ["-headers", header_str]
+    cmd += ["-analyzeduration", "1000000", "-probesize", "1000000"]
     if ss > 0:
         cmd += ["-ss", str(ss)]
     cmd += [
         "-i", target,
+        "-an",
         "-vf", scale,
         "-r", "25",
         "-q:v", q_val,
@@ -937,22 +973,24 @@ def car_stream_video():
         "pipe:1"
     ]
 
-    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, bufsize=65536)
+    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, bufsize=0)
 
     def gen():
         buf = bytearray()
         frame_idx = 0
         frame_interval = 1.0 / 25.0
+        read_fn = getattr(proc.stdout, "read1", proc.stdout.read)
         try:
             while True:
-                chunk = proc.stdout.read(65536)
+                chunk = read_fn(65536)
                 if not chunk:
                     break
                 buf.extend(chunk)
                 while True:
                     soi = buf.find(b"\xff\xd8")
                     if soi == -1:
-                        buf.clear()
+                        if len(buf) > 1:
+                            del buf[:-1]
                         break
                     eoi = buf.find(b"\xff\xd9", soi + 2)
                     if eoi == -1:
