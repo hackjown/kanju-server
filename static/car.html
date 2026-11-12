@@ -1813,7 +1813,6 @@
 
     // 智能防卡软解看门狗：挂接 CarMediaEngine 软解核心停滞与解码异常回调，自动无缝切到下一条最快线路
     let lineSwitchRetries = 0;
-    let lastLineSwitchTime = 0;
     let isAutoSwitching = false;
     if (window.CarMediaEngine) {
       window.CarMediaEngine.onStall = (reason) => {
@@ -1827,8 +1826,7 @@
     }
 
     function autoSwitchToNextFastLine(reason = '卡顿/超时') {
-      const now = Date.now();
-      if (now - lastLineSwitchTime < 5000 || isAutoSwitching) {
+      if (isAutoSwitching) {
         console.warn('[CarPlay] autoSwitchToNextFastLine 防抖节流中');
         return;
       }
@@ -1839,20 +1837,40 @@
       lineSwitchRetries++;
       if (lineSwitchRetries > currentLines.length) {
         console.warn('[Car] All lines attempted and failed');
-        showGestureHud('⚠️', '所有软解线路均响应超时，请点击换源重试', 3.0);
+        showGestureHud('⚠️', '所有软解线路均已尝试，请点击换源重试', 3.0);
         return;
       }
-      lastLineSwitchTime = now;
+
       isAutoSwitching = true;
-      const nextIdx = (currentLineIndex + 1) % currentLines.length;
+      // 将当前故障源标记为不可用
+      if (currentLines[currentLineIndex]) {
+        currentLines[currentLineIndex].available = false;
+        currentLines[currentLineIndex].latency = 99999;
+      }
+
+      // 智能寻找下一个可用健康源，优先跳过已知挂掉的源
+      let nextIdx = -1;
+      for (let step = 1; step < currentLines.length; step++) {
+        const candidateIdx = (currentLineIndex + step) % currentLines.length;
+        if (currentLines[candidateIdx] && currentLines[candidateIdx].available !== false) {
+          nextIdx = candidateIdx;
+          break;
+        }
+      }
+      if (nextIdx === -1) {
+        nextIdx = (currentLineIndex + 1) % currentLines.length;
+      }
+
       console.log(`[Car] Auto switching line from ${currentLineIndex} to ${nextIdx} (原因: ${reason})`);
       const nextLine = currentLines[nextIdx];
       const name = getCleanLineName(nextLine);
       showGestureHud('⚡', `检测到${reason}，自动切至【${name}】...`, 1.5);
+      renderLinesDrawer(currentLines);
+
       try {
         selectLine(nextIdx);
       } finally {
-        setTimeout(() => { isAutoSwitching = false; }, 2000);
+        setTimeout(() => { isAutoSwitching = false; }, 1200);
       }
     }
 
@@ -2120,7 +2138,9 @@
         btn.style.padding = '12px 16px';
 
         let speedTag = '';
-        if (l.latency && l.latency < 250) {
+        if (l.available === false) {
+          speedTag = `<span style="color: #ef4444; font-weight: 700;">✕ 不可用</span>`;
+        } else if (l.latency && l.latency < 250) {
           speedTag = `<span style="color: #10b981; font-weight: 800;">⚡ ${l.latency}ms 极速</span>`;
         } else if (l.latency && l.latency < 700) {
           speedTag = `<span style="color: #00e5ff; font-weight: 800;">★ ${l.latency}ms 优选</span>`;
@@ -2151,36 +2171,23 @@
 
       const candidateCount = Math.min(8, currentLines.length);
       const tested = await Promise.all(currentLines.slice(0, candidateCount).map(testLineLatency));
-      const allTested = tested.concat(currentLines.slice(candidateCount).map(l => ({ ...l, latency: 99999 })));
-      allTested.sort((a, b) => (a.latency || 99999) - (b.latency || 99999));
+      const allTested = tested.concat(currentLines.slice(candidateCount).map(l => ({ ...l, latency: 99999, available: true })));
+      allTested.sort((a, b) => {
+        const latA = (a.available !== false && a.latency) ? a.latency : 99999;
+        const latB = (b.available !== false && b.latency) ? b.latency : 99999;
+        return latA - latB;
+      });
       currentLines = allTested;
+      currentLineIndex = 0;
       renderLinesDrawer(currentLines);
       showGestureHud('⚡', '测速完成，已按响应速度重排', 1.2);
-    }
-
-    async function benchmarkLinesInBackground(lines) {
-      if (!lines || lines.length <= 1) return;
-      const candidateCount = Math.min(6, lines.length);
-      for (let i = 0; i < candidateCount; i++) {
-        try {
-          const tested = await testLineLatency(lines[i]);
-          if (tested.latency < 99999) {
-            lines[i].latency = tested.latency;
-            lines[i].available = tested.available;
-            renderLinesDrawer(currentLines);
-            if (i === currentLineIndex) {
-              const nameEl = document.getElementById('btn-line-name');
-              const cleanName = getCleanLineName(lines[i]);
-              if (nameEl) nameEl.innerText = cleanName + ` ${tested.latency}ms`;
-            }
-          }
-        } catch (_) {}
-      }
+      applyLinePlay(currentLines[0]);
     }
 
     async function loadPlayLines(token, title = '', epNum = 1) {
+      document.getElementById('btn-line-name').innerText = '测速选源中...';
       const linesBody = document.getElementById('drawer-lines-body');
-      linesBody.innerHTML = '<div style="color: var(--accent-cyan); font-size: 15px; padding: 10px;">正在检索优质极速线路...</div>';
+      linesBody.innerHTML = '<div style="color: var(--accent-cyan); font-size: 15px; padding: 10px;">正在并发测速优选极速源...</div>';
 
       try {
         const query = '?title=' + encodeURIComponent(title) + '&ep=' + encodeURIComponent(epNum);
@@ -2192,18 +2199,31 @@
         }
 
         const rawLines = d.lines;
-        currentLines = rawLines;
+        showGestureHud('⚡', `正在并发优选 ${rawLines.length} 条线路...`, 0.8);
+
+        // 并发对候选线路进行快速网络测速与健康检测（单线超时 1000ms）
+        const candidateCount = Math.min(6, rawLines.length);
+        const testedCandidates = await Promise.all(rawLines.slice(0, candidateCount).map(testLineLatency));
+        const remaining = rawLines.slice(candidateCount).map(l => ({ ...l, latency: 99999, available: true }));
+        const allTested = testedCandidates.concat(remaining);
+
+        // 测速智能排序：按响应延迟从小到大排序，不可用(404/403)排到最后
+        allTested.sort((a, b) => {
+          const latA = (a.available !== false && a.latency) ? a.latency : 99999;
+          const latB = (b.available !== false && b.latency) ? b.latency : 99999;
+          return latA - latB;
+        });
+
+        currentLines = allTested;
         currentLineIndex = 0;
         lineSwitchRetries = 0;
         renderLinesDrawer(currentLines);
 
-        // 立即秒播首选线路，0 秒等待出画！
-        const firstLine = currentLines[0];
-        showGestureHud('⚡', `优选播放: ${getCleanLineName(firstLine)}`, 1.2);
-        applyLinePlay(firstLine);
-
-        // 后台并发无感测速，动态更新测速徽标
-        benchmarkLinesInBackground(currentLines);
+        // 自动选择并播放测速第一名（最快健康极速源）
+        const fastest = currentLines[0];
+        const latStr = (fastest.latency && fastest.latency < 5000) ? ` (${fastest.latency}ms)` : '';
+        showGestureHud('⚡', `优选极速源: ${getCleanLineName(fastest)}${latStr}`, 1.5);
+        applyLinePlay(fastest);
       } catch (e) {
         console.error('[CarPlay] Line resolution/test error:', e);
         linesBody.innerHTML = '<div style="color: var(--accent-red); padding: 10px;">车机线路解析网络异常</div>';
