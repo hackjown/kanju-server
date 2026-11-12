@@ -4,7 +4,7 @@
 复现前端硬编码 HMAC 签名，代理上游 /v1/catalog、/v1/feed/home、/v1/playback/episodes，
 并把 resolve:// 票据与 m3u8 直链解析出来给前端播放。
 """
-import os, json, time, hmac, hashlib, secrets, threading, re, urllib.parse, functools
+import os, json, time, hmac, hashlib, secrets, threading, re, urllib.parse, functools, subprocess, struct, shutil
 
 import requests
 from flask import Flask, jsonify, request, send_from_directory, Response, make_response
@@ -801,6 +801,185 @@ def proxy():
             if chunk:
                 yield chunk
     return Response(gen(), status=r.status_code, headers=hdr)
+
+
+# ===== 改善型方案三：车机专属服务端极速转推流引擎 (行车免黑屏 + 零卡顿) =====
+_car_duration_cache = {}
+
+
+def _find_bin(name):
+    p = shutil.which(name)
+    if p:
+        return p
+    for cand in [f"/opt/homebrew/bin/{name}", f"/usr/local/bin/{name}", f"/usr/bin/{name}"]:
+        if os.path.exists(cand):
+            return cand
+    return name
+
+
+@app.route("/car_stream/duration", methods=["GET"])
+def car_stream_duration():
+    """快速获取视频真实时长，支持前端精确进度条与拖拽跳转"""
+    raw_u = request.args.get("u", "").strip()
+    if not raw_u:
+        return jsonify({"ok": False, "error": "missing u"}), 400
+    if raw_u in _car_duration_cache:
+        return jsonify({"ok": True, "duration": _car_duration_cache[raw_u]})
+
+    probe_target = raw_u
+    if raw_u.startswith("http") and not raw_u.startswith("http://127.0.0.1") and "/proxy" not in raw_u:
+        probe_target = f"http://127.0.0.1:8077/proxy?u={urllib.parse.quote(raw_u)}"
+    elif raw_u.startswith("/proxy"):
+        probe_target = f"http://127.0.0.1:8077{raw_u}"
+
+    try:
+        cmd = [
+            _find_bin("ffprobe"), "-v", "error",
+            "-show_entries", "format=duration",
+            "-of", "default=noprint_wrappers=1:nokey=1",
+            probe_target
+        ]
+        res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=12)
+        dur = float(res.stdout.strip())
+        _car_duration_cache[raw_u] = dur
+        return jsonify({"ok": True, "duration": dur})
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e), "duration": 0})
+
+
+@app.route("/car_stream/audio", methods=["GET"])
+def car_stream_audio():
+    """实时音频推流：转出标准 MP3 流由 <audio> 标签原生播放，100% 规避车机行车视频黑屏拦截"""
+    raw_u = request.args.get("u", "").strip()
+    if not raw_u:
+        return "missing u", 400
+    try:
+        ss = max(0.0, float(request.args.get("ss", 0)))
+    except Exception:
+        ss = 0.0
+
+    target = raw_u
+    if raw_u.startswith("http") and not raw_u.startswith("http://127.0.0.1") and "/proxy" not in raw_u:
+        target = f"http://127.0.0.1:8077/proxy?u={urllib.parse.quote(raw_u)}"
+    elif raw_u.startswith("/proxy"):
+        target = f"http://127.0.0.1:8077{raw_u}"
+
+    cmd = [_find_bin("ffmpeg"), "-nostdin", "-loglevel", "error"]
+    if ss > 0:
+        cmd += ["-ss", str(ss)]
+    cmd += [
+        "-i", target,
+        "-vn",
+        "-c:a", "libmp3lame",
+        "-b:a", "128k",
+        "-f", "mp3",
+        "pipe:1"
+    ]
+
+    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, bufsize=65536)
+
+    def gen():
+        try:
+            while True:
+                chunk = proc.stdout.read(16384)
+                if not chunk:
+                    break
+                yield chunk
+        finally:
+            try:
+                proc.terminate()
+                proc.kill()
+            except Exception:
+                pass
+
+    return Response(gen(), content_type="audio/mpeg", headers={
+        "Access-Control-Allow-Origin": "*",
+        "Cache-Control": "no-store",
+        "X-Accel-Buffering": "no"
+    })
+
+
+@app.route("/car_stream/video", methods=["GET"])
+def car_stream_video():
+    """实时视频帧流：抽取低码率 25FPS 极速 JPEG 帧，配合 12-byte PTS 时间戳包直推 Canvas，杜绝卡顿"""
+    raw_u = request.args.get("u", "").strip()
+    if not raw_u:
+        return "missing u", 400
+    try:
+        ss = max(0.0, float(request.args.get("ss", 0)))
+    except Exception:
+        ss = 0.0
+
+    q_mode = request.args.get("q", "720p").lower()
+    if q_mode == "480p":
+        scale = "scale=-2:480"
+        q_val = "6"
+    else:
+        scale = "scale=-2:720"
+        q_val = "5"
+
+    target = raw_u
+    if raw_u.startswith("http") and not raw_u.startswith("http://127.0.0.1") and "/proxy" not in raw_u:
+        target = f"http://127.0.0.1:8077/proxy?u={urllib.parse.quote(raw_u)}"
+    elif raw_u.startswith("/proxy"):
+        target = f"http://127.0.0.1:8077{raw_u}"
+
+    cmd = [_find_bin("ffmpeg"), "-nostdin", "-loglevel", "error"]
+    if ss > 0:
+        cmd += ["-ss", str(ss)]
+    cmd += [
+        "-i", target,
+        "-vf", scale,
+        "-r", "25",
+        "-q:v", q_val,
+        "-f", "image2pipe",
+        "-vcodec", "mjpeg",
+        "pipe:1"
+    ]
+
+    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, bufsize=65536)
+
+    def gen():
+        buf = bytearray()
+        frame_idx = 0
+        frame_interval = 1.0 / 25.0
+        try:
+            while True:
+                chunk = proc.stdout.read(65536)
+                if not chunk:
+                    break
+                buf.extend(chunk)
+                while True:
+                    soi = buf.find(b"\xff\xd8")
+                    if soi == -1:
+                        buf.clear()
+                        break
+                    eoi = buf.find(b"\xff\xd9", soi + 2)
+                    if eoi == -1:
+                        if soi > 0:
+                            del buf[:soi]
+                        break
+                    frame_data = buf[soi:eoi+2]
+                    del buf[:eoi+2]
+
+                    pts = ss + (frame_idx * frame_interval)
+                    frame_idx += 1
+
+                    # 12-byte header: Magic 'JGFR' (4B) + PTS float32 (4B) + Length uint32 (4B)
+                    header = b"JGFR" + struct.pack(">fI", pts, len(frame_data))
+                    yield header + frame_data
+        finally:
+            try:
+                proc.terminate()
+                proc.kill()
+            except Exception:
+                pass
+
+    return Response(gen(), content_type="application/octet-stream", headers={
+        "Access-Control-Allow-Origin": "*",
+        "Cache-Control": "no-store",
+        "X-Accel-Buffering": "no"
+    })
 
 
 # ===== 扩展接口 v2 =====
