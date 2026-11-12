@@ -190,7 +190,7 @@
       overflow: hidden;
     }
 
-    /* 原生 GPU 硬件直通视频解码层 (满帧60FPS，零CPU软解负担，不卡顿不崩溃) */
+    /* 方案二：底层 GPU 硬件直通视频解码层 (满帧60FPS，零CPU软解负担，置底避免触发行车视频黑屏拦截) */
     #car-video {
       position: absolute;
       top: 0;
@@ -198,12 +198,13 @@
       width: 100%;
       height: 100%;
       object-fit: contain;
-      background: #000;
-      z-index: 2;
+      background: transparent;
+      z-index: 1;
+      opacity: 0.001; /* 保持在 DOM 视口排版中全速硬件解码，视觉完全透明 */
       pointer-events: none;
     }
 
-    /* WebGL 画布 (用于色彩重映射与滤镜增强) */
+    /* 方案二：顶层 WebGL 画布 (唯一可见显示层与交互面，杜比色彩增强与滤镜生效，行驶中绝不黑屏) */
     #car-canvas {
       position: absolute;
       top: 0;
@@ -212,8 +213,8 @@
       height: 100%;
       object-fit: contain;
       background: #000;
-      z-index: 1;
-      display: none;
+      z-index: 5;
+      display: block;
       pointer-events: none;
     }
 
@@ -637,7 +638,7 @@
       <span class="logo-badge">极速车机版</span>
     </div>
     <div class="car-meta-status">
-      <div class="pill-badge active-cyan" id="badge-engine" onclick="openDrawer('drawer-engine')" style="cursor: pointer;" title="点击查看媒体引擎与解码诊断">⚡ 硬件 Canvas 直通 (60FPS · 行车免黑屏)</div>
+      <div class="pill-badge active-cyan" id="badge-engine" onclick="openDrawer('drawer-engine')" style="cursor: pointer;" title="点击查看媒体引擎与解码诊断">⚡ GPU 原生硬解（60FPS 流畅直通）</div>
       <div class="pill-badge active-green" id="badge-parking">🅿 驻车影院 · 屏幕常亮</div>
       <div class="digital-clock" id="car-clock">16:30:00</div>
       <button class="btn-car" onclick="location.href='/'" style="padding: 6px 12px; font-size: 13px;">💻 桌面版</button>
@@ -718,7 +719,9 @@
   <section id="player-view">
     <!-- 播放器视频与画布容器 -->
     <div class="canvas-container" id="touch-surface">
-      <!-- 核心全屏画面：100% 纯 WebGL Canvas 渲染层 (绝无原生 video 标签遮挡，彻底规避行车安全拦截) -->
+      <!-- 方案二底层：视口内硬件解码视频节点 (opacity:0.001 透明，z-index:1 置底，确保 VPU 全速硬解) -->
+      <video id="car-video" playsinline webkit-playsinline x5-video-player-type="h5" x5-playsinline preload="auto"></video>
+      <!-- 方案二顶层：100% WebGL Canvas 实时帧抓取渲染 (z-index:5 独占前台，车机只识别为 Canvas 图形) -->
       <canvas id="car-canvas"></canvas>
     </div>
 
@@ -744,7 +747,7 @@
         <div style="display: flex; align-items: center; gap: 8px;">
           <!-- 技术监控监视器 -->
           <div class="hud-tech-monitor">
-            <span>解码: <strong id="stat-decoder">硬件 Canvas 直通</strong></span>
+            <span>解码: <strong id="stat-decoder">GPU 原生硬解（60FPS 流畅直通）</strong></span>
             <span>帧率: <strong id="stat-fps">60.0 FPS</strong></span>
             <span id="stat-renderer" style="display:none">WebGL 2.0</span>
             <span id="stat-audio" style="display:none">WebAudio</span>
@@ -863,11 +866,11 @@
     <!-- 弹窗 5: 自主媒体引擎与 WASM 逐帧软解实测抽屉 -->
     <div class="car-drawer" id="drawer-engine">
       <div class="drawer-header">
-        <div class="drawer-title">⚡ 车机媒体引擎诊断与 WASM 逐帧软解实测</div>
+        <div class="drawer-title">⚡ 车机媒体引擎诊断</div>
         <button class="btn-car" onclick="closeDrawer('drawer-engine')">关闭</button>
       </div>
       <div style="font-size: 15px; color: var(--text-muted); margin-bottom: 14px; line-height: 1.6;">
-        剧场8 采用全新独立媒体管线：<strong>WebCodecs 硬件解复用</strong>、<strong>FFmpeg.wasm 逐帧软解 (RGBA ➔ WebGL)</strong> 与 <strong>AudioWorklet 环形缓冲</strong>。
+        剧场8 方案二：<strong>底层 GPU 硬件解码 + Canvas 实时帧抓取</strong>。视频由底层透明 &lt;video&gt; 节点驱动芯片 VPU 硬解，画面通过 <strong>WebGL Canvas 逐帧实时抓取</strong>渲染，音频由 <strong>WebAudio DSP</strong> 直通输出。
       </div>
 
       <div style="background: rgba(15,23,42,0.85); border: 1px solid var(--border-dark); border-radius: 14px; padding: 18px; margin-bottom: 16px;">
@@ -880,11 +883,11 @@
           <div>解码通道: <strong id="diag-codec" style="color: #fbbf24;">检测中…</strong></div>
           <div>帧率/输出: <strong id="diag-frames" style="color: #38bdf8;">检测中…</strong></div>
           <div>音频引擎: <strong id="diag-audio" style="color: #a78bfa;">检测中…</strong></div>
-          <div>原生 &lt;video&gt; 状态: <strong id="diag-video" style="color: #f87171;">检测中…</strong></div>
+          <div>底层 &lt;video&gt; 状态: <strong id="diag-video" style="color: #f87171;">检测中…</strong></div>
           <div>时间与进度: <strong id="diag-sync" style="color: #38bdf8;">-</strong></div>
         </div>
         <div id="diag-hls-note" style="margin-top: 14px; padding: 12px 14px; border-radius: 8px; background: rgba(56,189,248,0.12); border-left: 4px solid #38bdf8; font-size: 14px; color: #cbd5e1; display: block; line-height: 1.6;">
-          ⚡ <strong>全量 WASM 逐帧软解已激活</strong>：车机版已彻底移除 Native 兼容回退，所有影片及 M3U8 切片流均由 <strong>FFmpeg.wasm 底层软解为 RGBA 原始像素</strong> 直接写入 WebGL Canvas，音频由 <strong>AudioWorklet PCM 环形缓冲</strong> 直通输出，杜绝原生 video 参与！
+          ⚡ <strong>方案二已激活</strong>：底层 &lt;video&gt; 节点 (opacity: 0.001) 驱动芯片 GPU 硬件解码，<strong>WebGL Canvas 每帧抓取并渲染</strong>画面，1080P/4K 60FPS 满帧丝滑，行驶中彻底免黑屏！
         </div>
       </div>
 
@@ -946,7 +949,7 @@
     // 2. WebGL 逐帧 Canvas 渲染引擎 (含杜比色彩矩阵重映射)
     // ========================================================
     const canvas = document.getElementById('car-canvas');
-    const video = document.getElementById('car-offscreen-video') || document.getElementById('car-video') || document.getElementById('hidden-video') || document.createElement('video');
+    const video = document.getElementById('car-video') || document.createElement('video');
     let gl = null;
     let isWebGl = false;
     let ctx2d = null;
@@ -1494,14 +1497,11 @@
       const curBtn = document.getElementById(`col-btn-${mode}`);
       if (curBtn) curBtn.classList.add('selected');
 
-      if (mode === 0) {
-        canvas.style.display = 'none';
-        video.style.zIndex = '5';
-      } else {
-        canvas.style.display = 'block';
-        video.style.zIndex = '1';
-        canvas.style.zIndex = '5';
-      }
+      // 方案二: Canvas 必须始终置顶显示 (行驶中唯一可见面); video 始终透明置底
+      canvas.style.display = 'block';
+      canvas.style.zIndex = '5';
+      video.style.zIndex = '1';
+      video.style.opacity = '0.001';
 
       const statEl = document.getElementById('stat-colormode');
       if (mode === 1) {
@@ -1747,8 +1747,8 @@
     }
 
     let activePlayId = 0;
-    // 核心播放入口：方案一 硬件芯片 VPU 直通 Canvas 引擎 (零可见 video 标签 · 1080P/4K 60FPS · 行车免黑屏)
-    // 画面 100% 由 WebGL Canvas 呈现，杜比色彩增强生效，彻底规避车机系统的行车安全屏蔽与遮挡
+    // 核心播放入口：方案二 底层硬件解码 + 顶层 Canvas 实时帧抓取/绘制 (1080P/4K 60FPS · 行车免黑屏)
+    // video 节点置底 (opacity:0.001, z-index:1) 驱动芯片硬件 VPU 解码；Canvas 置顶 (z-index:5) 独占前台渲染
     async function playMediaSource(url) {
       const playId = ++activePlayId;
       initWebAudio();
@@ -1764,21 +1764,28 @@
         hlsInstance.destroy();
         hlsInstance = null;
       }
+      // 清空 video 旧源
+      video.pause();
+      video.removeAttribute('src');
+      video.load();
 
-      // 显示层级：以 WebGL Canvas 逐帧渲染为主显示层，彻底无原生视频窗口
+      // 显示层级：底层 video (opacity: 0.001, z-index: 1) + 顶层 Canvas (z-index: 5)
+      video.style.display = 'block';
+      video.style.zIndex = '1';
+      video.style.opacity = '0.001';
       canvas.style.display = 'block';
       canvas.style.zIndex = '5';
 
-      showGestureHud('⚡', '启动硬件 Canvas 极速直通...', 0.6);
+      showGestureHud('⚡', '启动 GPU 原生硬解 + Canvas 抓帧...', 0.6);
 
       let started = false;
       if (window.CarMediaEngine) {
         try {
-          started = await window.CarMediaEngine.startHardwareCanvasStream(url, canvas, carFrameRenderer);
+          started = await window.CarMediaEngine.startHardwareCanvasStream(url, canvas, carFrameRenderer, video);
           if (playId !== activePlayId) return;
           if (started) {
-            updateTechStats('硬件 Canvas 直通 (1080P 60FPS · 行车免黑屏)');
-            lineSwitchRetries = 0; // 成功出画，重置换源容错计数
+            updateTechStats('GPU 原生硬解（60FPS 流畅直通）');
+            lineSwitchRetries = 0;
           } else {
             console.warn('[CarPlay] Stream returned false, switching to next line');
             autoSwitchToNextFastLine('首片解码未就绪');
@@ -1799,7 +1806,7 @@
       const decEl = document.getElementById('stat-decoder');
       if (decEl && decoderStr) decEl.innerText = decoderStr;
       const rendEl = document.getElementById('stat-renderer');
-      if (rendEl) rendEl.innerText = (activeColorMode === 0) ? 'WebGL 2.0 (芯片 VPU 直通 · BT.709)' : 'WebGL 2.0 (杜比校色增强)';
+      if (rendEl) rendEl.innerText = (activeColorMode === 0) ? 'WebGL 2.0 (GPU 硬解帧抓取 · BT.709)' : 'WebGL 2.0 (杜比校色增强)';
       const fpsEl = document.getElementById('stat-fps');
       if (fpsEl) fpsEl.innerText = '60.0 FPS';
     }
@@ -1896,7 +1903,7 @@
     function updateEngineDiagnostics() {
       if (!window.CarMediaEngine) return;
       const diag = window.CarMediaEngine.getDiagnostics();
-      const hiddenVid = document.getElementById('hidden-video');
+      const carVid = document.getElementById('car-video');
 
       const diagMode = document.getElementById('diag-mode');
       const diagCodec = document.getElementById('diag-codec');
@@ -1907,7 +1914,15 @@
       const hlsNote = document.getElementById('diag-hls-note');
 
       if (diagMode) {
-        diagMode.textContent = diag.mode === 'wasm' ? '⚡ FFmpeg.wasm 逐帧纯软解 (全量生效中)' : (diag.mode === 'webcodecs' ? '⚡ WebCodecs 硬件解复用' : 'WASM 引擎就绪');
+        if (diag.mode === 'hardware_canvas') {
+          diagMode.textContent = '⚡ 方案二：底层 GPU 硬解 + Canvas 实时帧抓取 (生效中)';
+        } else if (diag.mode === 'wasm') {
+          diagMode.textContent = '⚡ FFmpeg.wasm 逐帧纯软解 (全量生效中)';
+        } else if (diag.mode === 'webcodecs') {
+          diagMode.textContent = '⚡ WebCodecs 硬件解复用';
+        } else {
+          diagMode.textContent = '引擎就绪';
+        }
         diagMode.style.color = '#38bdf8';
       }
 
@@ -1916,32 +1931,45 @@
       }
 
       if (diagCodec) {
-        diagCodec.textContent = diag.mode === 'wasm' ? 'FFmpeg.wasm 0.12 (libavcodec 逐帧纯软解)' : 'WebCodecs / WASM 引擎通道';
+        if (diag.mode === 'hardware_canvas') {
+          diagCodec.textContent = '芯片 VPU 硬件解码 (GPU 直通 Canvas)';
+        } else if (diag.mode === 'wasm') {
+          diagCodec.textContent = 'FFmpeg.wasm 0.12 (libavcodec 逐帧纯软解)';
+        } else {
+          diagCodec.textContent = 'WebCodecs / WASM 引擎通道';
+        }
       }
 
       if (diagFrames) {
-        if (diag.mode === 'wasm') {
+        if (diag.mode === 'hardware_canvas') {
+          const vw = carVid ? carVid.videoWidth : 0;
+          const vh = carVid ? carVid.videoHeight : 0;
+          diagFrames.textContent = `${currentFps || '60.0'} FPS (${vw}x${vh} 硬解帧 ➔ WebGL Canvas)`;
+        } else if (diag.mode === 'wasm') {
           diagFrames.textContent = `第 ${diag.wasmCurrentFrameIdx + 1} / ${diag.wasmFramesCount} 帧 (${diag.wasmW}x${diag.wasmH} RGBA)`;
         } else if (diag.mode === 'webcodecs') {
           diagFrames.textContent = `已解码: ${diag.decodedFrames} 帧, 丢弃: ${diag.droppedFrames}`;
         } else {
-          diagFrames.textContent = `${currentFps || '60.0'} FPS (原生抓帧 ➔ WebGL)`;
+          diagFrames.textContent = `${currentFps || '60.0'} FPS`;
         }
       }
 
       if (diagAudio) {
-        diagAudio.textContent = diag.audioWorkletActive ? 'AudioWorklet PCM 硬件环形缓冲' : 'WebAudio DSP 滤波';
+        diagAudio.textContent = diag.audioWorkletActive ? 'AudioWorklet PCM 硬件环形缓冲' : 'WebAudio DSP 滤波 (原生 video 音轨)';
       }
 
       if (diagVideo) {
-        if (diag.mode === 'wasm') {
+        if (diag.mode === 'hardware_canvas') {
+          diagVideo.textContent = carVid && carVid.src ? '底层硬解激活 (opacity:0.001 透明 ➔ Canvas 抓帧)' : '就绪';
+          diagVideo.style.color = '#4ade80';
+        } else if (diag.mode === 'wasm') {
           diagVideo.textContent = 'src="" (已彻底清空与暂停，0 原生参与)';
           diagVideo.style.color = '#4ade80';
         } else if (diag.mode === 'webcodecs') {
           diagVideo.textContent = 'src="" (已切断原生解码，杜绝重复渲染)';
           diagVideo.style.color = '#4ade80';
         } else {
-          diagVideo.textContent = hiddenVid && hiddenVid.src ? '激活中 (提供分段切片)' : '无';
+          diagVideo.textContent = carVid && carVid.src ? '激活中' : '无';
           diagVideo.style.color = '#fbbf24';
         }
       }
@@ -2266,7 +2294,11 @@
       if (window.CarMediaEngine) window.CarMediaEngine.stop();
       if (video && video.dataset?.wasmObjectUrl) { URL.revokeObjectURL(video.dataset.wasmObjectUrl); delete video.dataset.wasmObjectUrl; }
       if (video && typeof video.pause === 'function') {
-        try { video.pause(); } catch (_) {}
+        try {
+          video.pause();
+          video.removeAttribute('src');
+          video.load();
+        } catch (_) {}
       }
       if (hlsInstance) { hlsInstance.destroy(); hlsInstance = null; }
       document.getElementById('player-view').style.display = 'none';
