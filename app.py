@@ -808,13 +808,62 @@ _car_duration_cache = {}
 
 
 def _find_bin(name):
+    # 1. 系统 PATH 检索
     p = shutil.which(name)
     if p:
         return p
-    for cand in [f"/opt/homebrew/bin/{name}", f"/usr/local/bin/{name}", f"/usr/bin/{name}"]:
-        if os.path.exists(cand):
+
+    # 2. 常见 Linux / Mac / 容器系统路径及本地项目目录
+    cand_dirs = [
+        "/usr/bin",
+        "/usr/local/bin",
+        "/bin",
+        "/snap/bin",
+        "/opt/homebrew/bin",
+        os.path.join(HERE, "bin")
+    ]
+    for d in cand_dirs:
+        cand = os.path.join(d, name)
+        if os.path.exists(cand) and os.access(cand, os.X_OK):
             return cand
+
+    # 3. 如果是 ffmpeg，尝试从 imageio_ffmpeg 预编译静态库直接提取开箱即用的跨平台二进制
+    if name == "ffmpeg":
+        try:
+            import imageio_ffmpeg
+            exe = imageio_ffmpeg.get_ffmpeg_exe()
+            if exe and os.path.exists(exe) and os.access(exe, os.X_OK):
+                return exe
+        except Exception:
+            pass
+
     return name
+
+
+def _ensure_ffmpeg():
+    """确保环境具备 FFmpeg，若缺失则自动通过清华镜像静默安装静态跨平台轮子"""
+    bin_path = _find_bin("ffmpeg")
+    if shutil.which(bin_path) or (os.path.exists(bin_path) and os.access(bin_path, os.X_OK)):
+        return bin_path
+    try:
+        import sys
+        print("[CarStream] 未检测到系统 FFmpeg，正在自动安装 imageio-ffmpeg 补齐车载实时转码环境...")
+        subprocess.run([
+            sys.executable, "-m", "pip", "install", "-q",
+            "-i", "https://pypi.tuna.tsinghua.edu.cn/simple",
+            "imageio-ffmpeg"
+        ], timeout=120, check=True)
+        import imageio_ffmpeg
+        exe = imageio_ffmpeg.get_ffmpeg_exe()
+        print(f"[CarStream] FFmpeg 自动就绪: {exe}")
+        return exe
+    except Exception as e:
+        print(f"[CarStream] 自动安装 imageio-ffmpeg 异常: {e}")
+    return "ffmpeg"
+
+
+# 服务端加载时自动确保 FFmpeg 环境
+_ensure_ffmpeg()
 
 
 def _resolve_stream_target(raw_u):
@@ -865,22 +914,49 @@ def car_stream_duration():
         return jsonify({"ok": True, "duration": _car_duration_cache[raw_u]})
 
     target, header_str = _resolve_stream_target(raw_u)
-    try:
-        cmd = [_find_bin("ffprobe"), "-v", "error"]
-        if target.startswith("http://") or target.startswith("https://"):
-            cmd += ["-headers", header_str]
-        cmd += [
-            "-analyzeduration", "1000000", "-probesize", "1000000",
-            "-show_entries", "format=duration",
-            "-of", "default=noprint_wrappers=1:nokey=1",
-            target
-        ]
-        res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=8)
-        dur = float(res.stdout.strip())
+    dur = 0.0
+
+    # 1. 优先尝试 ffprobe 极速获取
+    ffprobe_bin = _find_bin("ffprobe")
+    if shutil.which(ffprobe_bin) or (os.path.exists(ffprobe_bin) and os.access(ffprobe_bin, os.X_OK)):
+        try:
+            cmd = [ffprobe_bin, "-v", "error"]
+            if target.startswith("http://") or target.startswith("https://"):
+                cmd += ["-headers", header_str]
+            cmd += [
+                "-analyzeduration", "1000000", "-probesize", "1000000",
+                "-show_entries", "format=duration",
+                "-of", "default=noprint_wrappers=1:nokey=1",
+                target
+            ]
+            res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=6)
+            dur = float(res.stdout.strip())
+        except Exception:
+            dur = 0.0
+
+    # 2. 若 ffprobe 不可用，无缝降级为 ffmpeg -i 探测
+    if dur <= 0:
+        ffmpeg_bin = _find_bin("ffmpeg")
+        if not shutil.which(ffmpeg_bin) and not os.path.exists(ffmpeg_bin):
+            ffmpeg_bin = _ensure_ffmpeg()
+        if shutil.which(ffmpeg_bin) or (os.path.exists(ffmpeg_bin) and os.access(ffmpeg_bin, os.X_OK)):
+            try:
+                cmd = [ffmpeg_bin, "-nostdin", "-loglevel", "info"]
+                if target.startswith("http://") or target.startswith("https://"):
+                    cmd += ["-headers", header_str]
+                cmd += ["-analyzeduration", "1000000", "-probesize", "1000000", "-i", target]
+                res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=6)
+                m = re.search(r"Duration:\s*(\d+):(\d+):(\d+(?:\.\d+)?)", res.stderr)
+                if m:
+                    h, mins, s = float(m.group(1)), float(m.group(2)), float(m.group(3))
+                    dur = h * 3600 + mins * 60 + s
+            except Exception:
+                dur = 0.0
+
+    if dur > 0:
         _car_duration_cache[raw_u] = dur
         return jsonify({"ok": True, "duration": dur})
-    except Exception as e:
-        return jsonify({"ok": False, "error": str(e), "duration": 0})
+    return jsonify({"ok": True, "duration": 0})
 
 
 @app.route("/car_stream/audio", methods=["GET"])
@@ -894,9 +970,15 @@ def car_stream_audio():
     except Exception:
         ss = 0.0
 
+    ffmpeg_bin = _find_bin("ffmpeg")
+    if not shutil.which(ffmpeg_bin) and not os.path.exists(ffmpeg_bin):
+        ffmpeg_bin = _ensure_ffmpeg()
+    if not shutil.which(ffmpeg_bin) and not os.path.exists(ffmpeg_bin):
+        return jsonify({"ok": False, "error": "ffmpeg_not_found", "message": "服务端未安装 FFmpeg，请执行: pip install imageio-ffmpeg 或 apt install -y ffmpeg"}), 503
+
     target, header_str = _resolve_stream_target(raw_u)
 
-    cmd = [_find_bin("ffmpeg"), "-nostdin", "-loglevel", "error"]
+    cmd = [ffmpeg_bin, "-nostdin", "-loglevel", "error"]
     if target.startswith("http://") or target.startswith("https://"):
         cmd += ["-headers", header_str]
     cmd += ["-analyzeduration", "1000000", "-probesize", "1000000"]
@@ -946,6 +1028,12 @@ def car_stream_video():
     except Exception:
         ss = 0.0
 
+    ffmpeg_bin = _find_bin("ffmpeg")
+    if not shutil.which(ffmpeg_bin) and not os.path.exists(ffmpeg_bin):
+        ffmpeg_bin = _ensure_ffmpeg()
+    if not shutil.which(ffmpeg_bin) and not os.path.exists(ffmpeg_bin):
+        return jsonify({"ok": False, "error": "ffmpeg_not_found", "message": "服务端未安装 FFmpeg，请执行: pip install imageio-ffmpeg 或 apt install -y ffmpeg"}), 503
+
     q_mode = request.args.get("q", "720p").lower()
     if q_mode == "480p":
         scale = "scale=-2:480"
@@ -956,7 +1044,7 @@ def car_stream_video():
 
     target, header_str = _resolve_stream_target(raw_u)
 
-    cmd = [_find_bin("ffmpeg"), "-nostdin", "-loglevel", "error"]
+    cmd = [ffmpeg_bin, "-nostdin", "-loglevel", "error"]
     if target.startswith("http://") or target.startswith("https://"):
         cmd += ["-headers", header_str]
     cmd += ["-analyzeduration", "1000000", "-probesize", "1000000"]

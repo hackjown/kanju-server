@@ -14,17 +14,27 @@ if [ -n "$PIDS" ]; then
   kill -9 $PIDS 2>/dev/null
 fi
 
-# 2) 后台启动
-rm -f /tmp/juchang8.log /tmp/kanju.log
+# 2) 检查并自动补齐 FFmpeg 运行环境
 if [ -x ".venv/bin/python3" ]; then
   PY=".venv/bin/python3"
 else
   PY="python3"
 fi
+
+if ! command -v ffmpeg >/dev/null 2>&1 && [ ! -x "./bin/ffmpeg" ]; then
+  echo "检测到系统未安装 FFmpeg，正在自动配置 imageio-ffmpeg..."
+  $PY -m pip install -q -i https://pypi.tuna.tsinghua.edu.cn/simple imageio-ffmpeg >/dev/null 2>&1 || true
+  if command -v apt-get >/dev/null 2>&1; then
+    apt-get update -qq && apt-get install -y -qq ffmpeg >/dev/null 2>&1 || true
+  fi
+fi
+
+# 3) 后台启动
+rm -f /tmp/juchang8.log /tmp/kanju.log
 nohup $PY app.py > /tmp/juchang8.log 2>&1 &
 echo "started pid=$!"
 
-# 3) 轮询端口最多 20 秒
+# 4) 轮询端口最多 20 秒
 for i in $(seq 1 20); do
   sleep 1
   CODE=$(curl -s -o /dev/null -w "%{http_code}" --max-time 3 http://127.0.0.1:8077/ 2>/dev/null)
