@@ -1762,9 +1762,7 @@ def api_p2p_config():
 
 @app.route("/download")
 def download_page():
-    if request.args.get("legacy") == "1":
-        return send_from_directory(os.path.join(HERE, "static"), "download.html")
-    return send_from_directory(os.path.join(HERE, "static"), "index.html")
+    return send_from_directory(os.path.join(HERE, "static"), "download.html")
 
 
 @app.route("/api/cast/pair", methods=["POST"])
