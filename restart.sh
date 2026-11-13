@@ -9,12 +9,11 @@ if command -v docker &>/dev/null && [ -f "docker-compose.yml" ]; then
     DC="docker compose"
   elif command -v docker-compose &>/dev/null; then
     DC="docker-compose"
+  else
+    DC="docker compose"
   fi
-  if [ -n "$DC" ]; then
-    if docker ps -a --format '{{.Names}}' 2>/dev/null | grep -qE '^juchang8|^juchang8_app'; then
-      USE_DOCKER=1
-    fi
-  fi
+  # 只要系统有 docker 且有 docker-compose.yml，优先采用容器方式运行
+  USE_DOCKER=1
 fi
 
 # 如果是 Docker 部署环境，直接以 Docker 标准方式重启容器！
@@ -22,7 +21,7 @@ if [ "$USE_DOCKER" -eq 1 ]; then
   echo "========================================================"
   echo " 检测到 juchang8 Docker 容器环境，正在一键重启服务..."
   echo "========================================================"
-  $DC restart juchang8 2>/dev/null || $DC up -d
+  docker restart juchang8_app 2>/dev/null || $DC restart juchang8 2>/dev/null || $DC up -d
   echo "=== Docker 容器已成功重启并载入最新代码 ==="
   exit 0
 fi
