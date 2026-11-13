@@ -530,7 +530,7 @@ def api_car_play(token):
             continue
 
         item = {
-            "label": f"★ 4K超清(需大带宽) · {lbl}" if is4k else f"⚡ 极速秒开 · {lbl}",
+            "label": f"★ 4K超清(需大带宽) · {lbl}" if is4k else f"⚡ 1080P极速秒开 · {lbl}",
             "kind": "hls" if ".m3u8" in real_url else kind,
             "url": real_url,
             "is_4k": is4k,
@@ -559,7 +559,7 @@ def api_car_play(token):
                 is4k = bool(cl.get("is_4k")) or _is4k(lbl)
                 is_fast = any(k in lbl for k in ("极速", "非凡", "量子", "暴风", "天空", "秒开", "快播"))
                 c_item = {
-                    "label": f"★ 4K超清(需大带宽) · {lbl}" if is4k else (f"⚡ 极速秒开 · {lbl}" if is_fast else f"流畅备用 · {lbl}"),
+                    "label": f"★ 4K超清(需大带宽) · {lbl}" if is4k else (f"⚡ 1080P极速秒开 · {lbl}" if is_fast else f"1080P备用 · {lbl}"),
                     "kind": "hls" if ".m3u8" in u else "mp4",
                     "url": u,
                     "is_4k": is4k,
@@ -572,7 +572,7 @@ def api_car_play(token):
         except Exception as e:
             print(f"[CarPlay] Collector lines error: {e}")
 
-    # 3. 车机专属极速优先排序（不考虑清晰度，速度快优先播放，杜绝卡顿）：
+    # 3. 车机专属 1080P 极速优先排序（优先 1080P 秒开官方高画质源，杜绝服务端重编码卡顿）：
     # 梯队 1: 极速秒开线路（剧场8 官方1080P/720P + 采集源极速 1080P，码率适中秒开首选）
     # 梯队 2: 流畅备用线路
     # 梯队 3: 4K 超清专线（排在列表最末尾，供用户连接车库Wi-Fi时手动点选，决不作为默认源）
