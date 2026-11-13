@@ -204,13 +204,14 @@
       pointer-events: none;
     }
 
-    /* 方案A 底层硬件解码器：1x1 隐藏脱屏，杜绝任何车机行车拦截检测 */
+    /* 方案A 底层硬件解码器：100% 全屏置底脱屏，杜绝任何车机行车拦截检测 */
     #car-video {
       position: absolute;
       top: 0;
       left: 0;
-      width: 1px;
-      height: 1px;
+      width: 100%;
+      height: 100%;
+      object-fit: contain;
       opacity: 0.001;
       pointer-events: none;
       z-index: 1;
@@ -724,8 +725,8 @@
     <div class="canvas-container" id="touch-surface">
       <!-- 方案A 独占渲染画布：WebGL 硬件加速渲染，全屏独占，车载行驶中绝不触发黑屏拦截 -->
       <canvas id="car-canvas" style="display: block; position: absolute; top: 0; left: 0; width: 100%; height: 100%; object-fit: contain; z-index: 5;"></canvas>
-      <!-- 方案A 底层硬件解码管道：1x1 子像素静默硬解，置底脱屏，车载系统无法检测到视频窗口 -->
-      <video id="car-video" playsinline webkit-playsinline x5-video-player-type="h5" x5-playsinline style="position: absolute; top: 0; left: 0; width: 1px; height: 1px; opacity: 0.001; pointer-events: none; z-index: 1;"></video>
+      <!-- 方案A 底层硬件解码管道：全屏置底硬件静默硬解，置底脱屏，车载系统无法检测到视频窗口 -->
+      <video id="car-video" playsinline webkit-playsinline x5-video-player-type="h5" x5-playsinline crossorigin="anonymous" style="position: absolute; top: 0; left: 0; width: 100%; height: 100%; object-fit: contain; opacity: 0.001; pointer-events: none; z-index: 1;"></video>
       <!-- 标准 HTML5 Audio 备用节点 -->
       <audio id="car-audio" preload="auto" style="display: none;"></audio>
     </div>
@@ -1237,16 +1238,23 @@
         if (isWebGl && gl) gl.viewport(0, 0, width, height);
       },
       draw(frameSource) {
-        if (isWebGl && gl && glProgram) {
-          gl.useProgram(glProgram);
-          gl.bindTexture(gl.TEXTURE_2D, glTex);
-          gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, frameSource);
-          gl.uniform1i(uColorModeLoc, activeColorMode);
-          gl.uniform1f(uBrightnessLoc, userBrightness);
-          gl.uniform1f(uContrastLoc, userContrast);
-          gl.drawArrays(gl.TRIANGLES, 0, 6);
-        } else if (ctx2d) {
-          ctx2d.drawImage(frameSource, 0, 0, canvas.width, canvas.height);
+        try {
+          if (isWebGl && gl && glProgram) {
+            gl.useProgram(glProgram);
+            gl.bindTexture(gl.TEXTURE_2D, glTex);
+            gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, frameSource);
+            gl.uniform1i(uColorModeLoc, activeColorMode);
+            gl.uniform1f(uBrightnessLoc, userBrightness);
+            gl.uniform1f(uContrastLoc, userContrast);
+            gl.drawArrays(gl.TRIANGLES, 0, 6);
+          } else if (ctx2d) {
+            ctx2d.drawImage(frameSource, 0, 0, canvas.width, canvas.height);
+          }
+        } catch (err) {
+          // 如果 WebGL / Canvas 抽取受浏览器沙箱或跨域安全拦截，平滑无缝降级为原生 Video 硬件层直接呈现，绝不黑屏！
+          if (video && video.style.opacity !== '1') {
+            video.style.cssText = 'position: absolute; top: 0; left: 0; width: 100%; height: 100%; object-fit: contain; opacity: 1; pointer-events: none; z-index: 6;';
+          }
         }
       },
       drawRgba(pixels, width, height) {
@@ -2101,7 +2109,8 @@
       canvas.style.height = '100%';
       canvas.style.zIndex = '5';
 
-      video.style.cssText = 'position: absolute; top: 0; left: 0; width: 1px; height: 1px; opacity: 0.001; pointer-events: none; z-index: 1;';
+      video.crossOrigin = 'anonymous';
+      video.style.cssText = 'position: absolute; top: 0; left: 0; width: 100%; height: 100%; object-fit: contain; opacity: 0.001; pointer-events: none; z-index: 1;';
       video.muted = false;
 
       showGestureHud('⚡', '方案A 芯片硬解 · 1080P 秒开...', 0.6);
