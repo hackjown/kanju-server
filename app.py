@@ -841,29 +841,11 @@ def _find_bin(name):
 
 
 def _ensure_ffmpeg():
-    """确保环境具备 FFmpeg，若缺失则自动通过清华镜像静默安装静态跨平台轮子"""
+    """检测环境 FFmpeg（方案A采用客户端硬解，服务端无需强制安装）"""
     bin_path = _find_bin("ffmpeg")
     if shutil.which(bin_path) or (os.path.exists(bin_path) and os.access(bin_path, os.X_OK)):
         return bin_path
-    try:
-        import sys
-        print("[CarStream] 未检测到系统 FFmpeg，正在自动安装 imageio-ffmpeg 补齐车载实时转码环境...")
-        subprocess.run([
-            sys.executable, "-m", "pip", "install", "-q",
-            "-i", "https://pypi.tuna.tsinghua.edu.cn/simple",
-            "imageio-ffmpeg"
-        ], timeout=120, check=True)
-        import imageio_ffmpeg
-        exe = imageio_ffmpeg.get_ffmpeg_exe()
-        print(f"[CarStream] FFmpeg 自动就绪: {exe}")
-        return exe
-    except Exception as e:
-        print(f"[CarStream] 自动安装 imageio-ffmpeg 异常: {e}")
     return "ffmpeg"
-
-
-# 服务端加载时自动确保 FFmpeg 环境
-_ensure_ffmpeg()
 
 
 def _resolve_stream_target(raw_u):
