@@ -14,19 +14,11 @@ if [ -n "$PIDS" ]; then
   kill -9 $PIDS 2>/dev/null
 fi
 
-# 2) 检查并自动补齐 FFmpeg 运行环境
+# 2) 选择 Python 环境
 if [ -x ".venv/bin/python3" ]; then
   PY=".venv/bin/python3"
 else
   PY="python3"
-fi
-
-if ! command -v ffmpeg >/dev/null 2>&1 && [ ! -x "./bin/ffmpeg" ]; then
-  echo "检测到系统未安装 FFmpeg，正在自动配置 imageio-ffmpeg..."
-  $PY -m pip install -q -i https://pypi.tuna.tsinghua.edu.cn/simple imageio-ffmpeg >/dev/null 2>&1 || true
-  if command -v apt-get >/dev/null 2>&1; then
-    apt-get update -qq && apt-get install -y -qq ffmpeg >/dev/null 2>&1 || true
-  fi
 fi
 
 # 3) 后台启动
