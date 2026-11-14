@@ -46,6 +46,13 @@ _ensure_cache_seeds()
 
 app = Flask(__name__, static_folder=os.path.join(HERE, "static"), static_url_path="/static")
 
+# 剧场8 TV 投屏服务（原生 /v1/tv-cast/ws：配对、投屏、遥控、电视端浏览全部由本服务器处理）
+try:
+    import juchang8_tvcast
+    juchang8_tvcast.register(app, lambda: _me())
+except Exception as _e:
+    print('[tvcast] 初始化失败:', _e)
+
 
 @app.errorhandler(500)
 def handle_500(e):
