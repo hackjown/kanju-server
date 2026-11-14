@@ -3,10 +3,10 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
-  <title>车机极速硬解播放器 (Tesla Bypass)</title>
+  <title>车载影院播放器 (Tesla-Netflix Bypass)</title>
   <script>
     // ═════════════════════════════════════════════════════════════════
-    // 特斯拉 / 新能源车机行车视频防黑屏套件 (Tesla-Netflix Bypass v2.0)
+    // 特斯拉行车防护基础环境劫持 (防止行车切档触发 hidden / visibilitychange 暂停)
     // ═════════════════════════════════════════════════════════════════
     (function() {
       try {
@@ -14,13 +14,11 @@
         Object.defineProperty(document, 'visibilityState', { get: () => 'visible', configurable: true });
         Object.defineProperty(document, 'webkitHidden', { get: () => false, configurable: true });
         Object.defineProperty(document, 'webkitVisibilityState', { get: () => 'visible', configurable: true });
-      } catch (e) {
-        console.warn('[Bypass] defineProperty warning:', e);
-      }
+      } catch (e) {}
     })();
   </script>
   <style>
-    * {
+    *, *::before, *::after {
       box-sizing: border-box;
       margin: 0;
       padding: 0;
@@ -36,67 +34,68 @@
       color: #fff;
       font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
     }
-    .player-root {
+    .player-page {
       position: relative;
-      width: 100%;
-      height: 100%;
+      width: 100vw;
+      height: 100vh;
       background: #000;
-      display: flex;
-      align-items: center;
-      justify-content: center;
       overflow: hidden;
     }
-    video {
-      width: 100%;
-      height: 100%;
-      object-fit: contain;
-      background: #000;
-      pointer-events: none;
-    }
-
-    /* HUD 交互遮罩层 */
-    .hud-overlay {
+    .player-container {
+      width: 100vw;
+      height: 100vh;
       position: absolute;
       inset: 0;
+      background: #000;
+      z-index: 1;
+    }
+
+    /* 顶栏 HUD 控制条 (磨砂渐变) */
+    .hud-top {
+      position: absolute;
+      top: 0;
+      left: 0;
+      right: 0;
+      height: 64px;
+      padding: 12px 20px;
       display: flex;
-      flex-direction: column;
+      align-items: center;
       justify-content: space-between;
+      background: linear-gradient(180deg, rgba(0,0,0,0.85) 0%, rgba(0,0,0,0.45) 60%, rgba(0,0,0,0) 100%);
+      z-index: 25;
       pointer-events: none;
       opacity: 1;
       transition: opacity 0.3s cubic-bezier(0.4, 0, 0.2, 1);
-      z-index: 10;
-      background: linear-gradient(180deg, rgba(0,0,0,0.85) 0%, rgba(0,0,0,0) 25%, rgba(0,0,0,0) 70%, rgba(0,0,0,0.9) 100%);
     }
-    .hud-overlay.hidden {
+    .hud-top.hidden {
       opacity: 0;
       pointer-events: none;
     }
-    .hud-overlay > * {
+    .hud-top > * {
       pointer-events: auto;
     }
 
-    /* 顶栏 */
-    .hud-top {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      padding: 16px 24px;
-      gap: 16px;
-    }
     .top-left {
       display: flex;
       align-items: center;
-      gap: 14px;
+      gap: 12px;
       min-width: 0;
     }
-    .btn-icon {
+    .top-right {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      flex-shrink: 0;
+    }
+
+    .btn-hud {
       background: rgba(255, 255, 255, 0.12);
       border: 1px solid rgba(255, 255, 255, 0.25);
-      border-radius: 10px;
+      border-radius: 8px;
       color: #fff;
-      font-size: 14px;
+      font-size: 13px;
       font-weight: 600;
-      padding: 8px 16px;
+      padding: 7px 14px;
       cursor: pointer;
       display: inline-flex;
       align-items: center;
@@ -104,120 +103,65 @@
       white-space: nowrap;
       transition: all 0.2s;
     }
-    .btn-icon:active {
+    .btn-hud:active {
       transform: scale(0.96);
       background: rgba(0, 229, 255, 0.25);
       border-color: #00e5ff;
     }
-    .btn-icon.gold {
+    .btn-hud.gold {
       background: rgba(245, 158, 11, 0.2);
       border-color: #f59e0b;
       color: #fbbf24;
     }
+
     .title-group {
       display: flex;
       flex-direction: column;
       min-width: 0;
     }
     .title-main {
-      font-size: 18px;
+      font-size: 15px;
       font-weight: 700;
       color: #fff;
+      white-space: nowrap;
       overflow: hidden;
       text-overflow: ellipsis;
-      white-space: nowrap;
+      max-width: 280px;
     }
     .title-sub {
-      font-size: 13px;
+      font-size: 12px;
       color: #00e5ff;
-      margin-top: 2px;
-      font-weight: 600;
+      white-space: nowrap;
     }
-    .top-right {
-      display: flex;
-      align-items: center;
-      gap: 12px;
-      flex-shrink: 0;
-    }
-    .bypass-badge {
+
+    /* 行车防黑屏技术指示微章 */
+    .badge-bypass {
       display: inline-flex;
       align-items: center;
       gap: 6px;
-      background: rgba(74, 222, 128, 0.12);
-      border: 1px solid rgba(74, 222, 128, 0.4);
-      color: #4ade80;
-      padding: 6px 12px;
+      padding: 5px 12px;
       border-radius: 20px;
+      background: rgba(16, 185, 129, 0.18);
+      border: 1px solid rgba(16, 185, 129, 0.4);
+      color: #34d399;
       font-size: 12px;
       font-weight: 700;
       letter-spacing: 0.5px;
     }
-    .bypass-dot {
+    .badge-bypass-dot {
       width: 7px;
       height: 7px;
       border-radius: 50%;
-      background: #4ade80;
-      box-shadow: 0 0 8px #4ade80;
-      animation: pulse 1.8s infinite;
+      background: #10b981;
+      box-shadow: 0 0 6px #10b981;
+      animation: pulse 2s infinite;
     }
     @keyframes pulse {
       0%, 100% { opacity: 1; transform: scale(1); }
-      50% { opacity: 0.4; transform: scale(0.85); }
+      50% { opacity: 0.4; transform: scale(0.8); }
     }
 
-    /* 声音解锁大按钮 (自动播放静音降级时提示) */
-    .btn-unlock-sound {
-      background: linear-gradient(135deg, #f59e0b, #d97706);
-      border: none;
-      color: #000;
-      font-weight: 800;
-      padding: 8px 16px;
-      border-radius: 10px;
-      font-size: 13px;
-      display: none;
-      align-items: center;
-      gap: 6px;
-      cursor: pointer;
-      animation: bounce 1.5s infinite;
-      box-shadow: 0 4px 16px rgba(245, 158, 11, 0.4);
-    }
-    @keyframes bounce {
-      0%, 100% { transform: translateY(0); }
-      50% { transform: translateY(-4px); }
-    }
-
-    /* 中央轻触提示 HUD */
-    .center-hud {
-      position: absolute;
-      top: 50%;
-      left: 50%;
-      transform: translate(-50%, -50%);
-      background: rgba(15, 23, 42, 0.92);
-      border: 1px solid rgba(0, 229, 255, 0.4);
-      backdrop-filter: blur(16px);
-      padding: 16px 28px;
-      border-radius: 16px;
-      display: flex;
-      align-items: center;
-      gap: 12px;
-      font-size: 16px;
-      font-weight: 700;
-      color: #fff;
-      box-shadow: 0 8px 32px rgba(0,0,0,0.8);
-      opacity: 0;
-      pointer-events: none;
-      transition: opacity 0.25s;
-      z-index: 25;
-    }
-    .center-hud.show {
-      opacity: 1;
-    }
-    .center-hud-icon {
-      font-size: 24px;
-      color: #00e5ff;
-    }
-
-    /* 缓冲指示器 */
+    /* 缓冲指示遮罩 */
     .spinner-wrap {
       position: absolute;
       top: 50%;
@@ -227,11 +171,12 @@
       flex-direction: column;
       align-items: center;
       gap: 12px;
-      z-index: 20;
+      z-index: 15;
+      pointer-events: none;
     }
     .spinner {
-      width: 48px;
-      height: 48px;
+      width: 44px;
+      height: 44px;
       border: 4px solid rgba(255, 255, 255, 0.15);
       border-top-color: #00e5ff;
       border-radius: 50%;
@@ -241,774 +186,309 @@
       to { transform: rotate(360deg); }
     }
 
-    /* 底栏 */
-    .hud-bottom {
-      padding: 16px 24px 24px 24px;
-      display: flex;
-      flex-direction: column;
-      gap: 14px;
-    }
-
-    /* 进度条 */
-    .progress-row {
-      display: flex;
-      align-items: center;
-      gap: 14px;
-      width: 100%;
-    }
-    .time-text {
-      font-size: 14px;
-      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-      color: rgba(255, 255, 255, 0.85);
-      min-width: 54px;
-      text-align: center;
-    }
-    .progress-track {
-      position: relative;
-      flex: 1;
-      height: 32px;
-      display: flex;
-      align-items: center;
-      cursor: pointer;
-      touch-action: none;
-    }
-    .progress-bg {
-      position: relative;
-      width: 100%;
-      height: 6px;
-      background: rgba(255, 255, 255, 0.25);
-      border-radius: 4px;
-      overflow: hidden;
-      transition: height 0.15s;
-    }
-    .progress-track:hover .progress-bg,
-    .progress-track:active .progress-bg {
-      height: 10px;
-    }
-    .progress-buffered {
-      position: absolute;
-      top: 0;
-      left: 0;
-      height: 100%;
-      background: rgba(255, 255, 255, 0.4);
-      width: 0%;
-      border-radius: 4px;
-    }
-    .progress-played {
-      position: absolute;
-      top: 0;
-      left: 0;
-      height: 100%;
-      background: linear-gradient(90deg, #00e5ff, #38bdf8);
-      width: 0%;
-      border-radius: 4px;
-    }
-    .progress-thumb {
+    /* 快捷切换集数浮标 (左右侧边缘隐蔽按钮) */
+    .btn-side-nav {
       position: absolute;
       top: 50%;
-      left: 0%;
-      width: 18px;
-      height: 18px;
-      margin-left: -9px;
       transform: translateY(-50%);
-      background: #fff;
-      border: 2px solid #00e5ff;
-      border-radius: 50%;
-      box-shadow: 0 0 10px rgba(0, 229, 255, 0.8);
-      transition: transform 0.1s;
-      pointer-events: none;
-    }
-    .progress-track:active .progress-thumb {
-      transform: translateY(-50%) scale(1.25);
-    }
-
-    /* 控制按钮栏 */
-    .controls-row {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      width: 100%;
-      gap: 12px;
-    }
-    .controls-left, .controls-right {
-      display: flex;
-      align-items: center;
-      gap: 10px;
-    }
-    .btn-ctl {
-      background: rgba(255, 255, 255, 0.12);
+      background: rgba(0, 0, 0, 0.5);
       border: 1px solid rgba(255, 255, 255, 0.2);
       color: #fff;
-      border-radius: 10px;
-      font-size: 14px;
-      font-weight: 600;
-      padding: 10px 18px;
-      cursor: pointer;
-      display: inline-flex;
-      align-items: center;
-      gap: 6px;
-      transition: all 0.2s;
-    }
-    .btn-ctl:active {
-      transform: scale(0.95);
-      background: rgba(0, 229, 255, 0.25);
-    }
-    .btn-ctl.primary {
-      background: linear-gradient(135deg, #00e5ff, #0284c7);
-      border: none;
-      color: #000;
+      padding: 16px 10px;
+      border-radius: 8px;
+      font-size: 16px;
       font-weight: 700;
-      padding: 10px 24px;
-      box-shadow: 0 4px 16px rgba(0, 229, 255, 0.35);
+      cursor: pointer;
+      z-index: 20;
+      transition: all 0.2s;
+      opacity: 0.7;
     }
-    .btn-ctl.gold {
-      background: rgba(245, 158, 11, 0.2);
-      border: 1px solid rgba(245, 158, 11, 0.4);
-      color: #fbbf24;
+    .btn-side-nav:active {
+      transform: translateY(-50%) scale(0.95);
+      background: rgba(0, 229, 255, 0.3);
+      border-color: #00e5ff;
     }
+    .btn-side-nav.prev { left: 12px; }
+    .btn-side-nav.next { right: 12px; }
+    .btn-side-nav.hidden { opacity: 0; pointer-events: none; }
 
     @media (max-width: 768px) {
-      .hud-top { padding: 10px 14px; }
-      .hud-bottom { padding: 10px 14px 16px 14px; }
-      .btn-ctl { padding: 8px 12px; font-size: 12px; }
-      .btn-ctl.primary { padding: 8px 16px; font-size: 13px; }
-      .hide-mobile { display: none !important; }
+      .hud-top { padding: 8px 12px; height: 54px; }
+      .title-main { max-width: 160px; font-size: 13px; }
+      .badge-bypass { display: none; }
+      .btn-hud { padding: 5px 10px; font-size: 12px; }
     }
   </style>
 </head>
 <body>
 
-  <div class="player-root" id="player-root">
-    <!-- 原生硬件解码 Video 标签 (GPU 直解，零 Canvas 性能损耗) -->
-    <video
-      id="player-video"
-      playsinline
-      webkit-playsinline
-      x5-playsinline
-      x5-video-player-type="h5"
-      crossorigin="anonymous"
-      preload="auto">
-    </video>
+  <div class="player-page" id="player-page">
+    <!-- Tesla 核心播放引擎专属容器 (挂载 Canvas WebGL + WebCodecs 硬解) -->
+    <div class="player-container" id="player-container"></div>
 
-    <!-- 缓冲动画与状态 -->
+    <!-- 缓冲遮罩 -->
     <div class="spinner-wrap" id="spinner-wrap">
       <div class="spinner"></div>
-      <span id="spinner-text" style="font-size: 14px; color: #00e5ff; font-weight: 700;">正在加载极速源...</span>
+      <span id="spinner-text" style="font-size: 13px; color: #00e5ff; font-weight: 700;">正在建立极速硬件直解流...</span>
     </div>
 
-    <!-- 中央交互 HUD 弹窗 -->
-    <div class="center-hud" id="center-hud">
-      <div class="center-hud-icon" id="center-hud-icon">▶</div>
-      <div id="center-hud-text">播放</div>
-    </div>
-
-    <!-- HUD 交互顶层 -->
-    <div class="hud-overlay" id="hud-overlay">
-      <!-- 顶栏 -->
-      <div class="hud-top">
-        <div class="top-left">
-          <button class="btn-icon" id="btn-back" onclick="handleExit()">
-            <span>←</span>
-            <span>退出影院</span>
-          </button>
-          <div class="title-group">
-            <div class="title-main" id="disp-title">剧场8 车载影院</div>
-            <div class="title-sub" id="disp-subtitle">正片 · 1080P 极速硬解</div>
-          </div>
-        </div>
-
-        <div class="top-right">
-          <!-- 换源与选集快捷抽屉按钮 (直接通知宿主窗口展开对应抽屉) -->
-          <button class="btn-icon gold" onclick="openParentDrawer('drawer-lines')" title="切换极速/备用线路">⚡ 换线路</button>
-          <button class="btn-icon" onclick="openParentDrawer('drawer-eps')" title="选择剧集">📑 选集</button>
-          
-          <button class="btn-unlock-sound" id="btn-unlock-sound" onclick="unlockAudioManual()">
-            🔊 点击开启声音
-          </button>
-
-          <div class="bypass-badge" title="行车安全防护套件已就绪 (防黑屏 · WebAudio 声音桥接 · 硬件直解)">
-            <div class="bypass-dot"></div>
-            <span>行车防黑屏就绪</span>
-          </div>
-
-          <button class="btn-icon hide-mobile" id="btn-fullscreen-top" onclick="toggleFullscreen()">
-            ⛶ 全屏
-          </button>
+    <!-- 顶栏 HUD (与播放器内置底栏联动呼应) -->
+    <div class="hud-top" id="hud-top">
+      <div class="top-left">
+        <button class="btn-hud" id="btn-back" onclick="handleExit()">
+          <span>←</span>
+          <span>退出影院</span>
+        </button>
+        <div class="title-group">
+          <div class="title-main" id="disp-title">车载影院</div>
+          <div class="title-sub" id="disp-subtitle">正片 · 1080P 极速硬解 (零黑屏)</div>
         </div>
       </div>
 
-      <!-- 底栏 -->
-      <div class="hud-bottom">
-        <!-- 进度条 -->
-        <div class="progress-row">
-          <span class="time-text" id="time-cur">00:00</span>
-          <div class="progress-track" id="progress-track">
-            <div class="progress-bg">
-              <div class="progress-buffered" id="progress-buffered"></div>
-              <div class="progress-played" id="progress-played"></div>
-            </div>
-            <div class="progress-thumb" id="progress-thumb"></div>
-          </div>
-          <span class="time-text" id="time-dur">00:00</span>
+      <div class="top-right">
+        <button class="btn-hud gold" onclick="openParentDrawer('drawer-lines')" title="切换极速/备用线路">⚡ 换线路</button>
+        <button class="btn-hud" onclick="openParentDrawer('drawer-eps')" title="选择剧集">📑 选集</button>
+
+        <div class="badge-bypass" title="Tesla-Netflix 方案就绪 (Canvas WebGL 硬件直解 · 零视频标签 · 行车绝不黑屏)">
+          <div class="badge-bypass-dot"></div>
+          <span>行车防黑屏就绪</span>
         </div>
 
-        <!-- 控制按钮 -->
-        <div class="controls-row">
-          <div class="controls-left">
-            <button class="btn-ctl" id="btn-prev" onclick="handlePrev()">⏮ 上集</button>
-            <button class="btn-ctl" onclick="seekRelative(-15)">⏪ 15s</button>
-            <button class="btn-ctl primary" id="btn-play" onclick="togglePlayPause()">⏸ 暂停</button>
-            <button class="btn-ctl" onclick="seekRelative(15)">⏩ 15s</button>
-            <button class="btn-ctl" id="btn-next" onclick="handleNext()">⏭ 下集</button>
-          </div>
-
-          <div class="controls-right">
-            <button class="btn-ctl gold" id="btn-speed" onclick="cycleSpeed()">1.0x</button>
-            <button class="btn-ctl primary" id="btn-fullscreen" onclick="toggleFullscreen()">⛶ 全屏</button>
-          </div>
-        </div>
+        <button class="btn-hud" id="btn-fullscreen-top" onclick="toggleFullscreen()">
+          ⛶ 全屏
+        </button>
       </div>
     </div>
+
+    <!-- 快捷切集浮标 (选配联动) -->
+    <button class="btn-side-nav prev" id="btn-side-prev" onclick="handlePrev()" title="上一集">⏮</button>
+    <button class="btn-side-nav next" id="btn-side-next" onclick="handleNext()" title="下一集">⏭</button>
   </div>
 
-  <!-- 本地优先加载 Hls.js，兼顾离线与高可用 -->
-  <script src="/static/hls.min.js"></script>
-  <script>
-    if (!window.Hls) {
-      var cdnScript = document.createElement('script');
-      cdnScript.src = 'https://cdn.jsdelivr.net/npm/hls.js@latest';
-      document.head.appendChild(cdnScript);
-    }
-  </script>
+  <script type="module">
+    import { n as TeslaPlayer } from '/static/tesla_player_engine.js';
 
-  <script>
-    // ═════════════════════════════════════════════════════════════════
-    // 车机播放器核心逻辑与 Drive Bypass 控制
-    // ═════════════════════════════════════════════════════════════════
-    const video = document.getElementById('player-video');
-    const hudOverlay = document.getElementById('hud-overlay');
-    const centerHud = document.getElementById('center-hud');
-    const centerHudIcon = document.getElementById('center-hud-icon');
-    const centerHudText = document.getElementById('center-hud-text');
-    const spinnerWrap = document.getElementById('spinner-wrap');
-    const spinnerText = document.getElementById('spinner-text');
-    const btnPlay = document.getElementById('btn-play');
-    const btnSpeed = document.getElementById('btn-speed');
-    const btnUnlockSound = document.getElementById('btn-unlock-sound');
-    const timeCur = document.getElementById('time-cur');
-    const timeDur = document.getElementById('time-dur');
-    const progressTrack = document.getElementById('progress-track');
-    const progressPlayed = document.getElementById('progress-played');
-    const progressBuffered = document.getElementById('progress-buffered');
-    const progressThumb = document.getElementById('progress-thumb');
+    // ─────────────────────────────────────────────────────────────
+    // 1. 初始化参数解析与状态管理
+    // ─────────────────────────────────────────────────────────────
+    const urlParams = new URLSearchParams(window.location.search);
+    let streamUrl = urlParams.get('url') || '';
+    let movieTitle = urlParams.get('title') || '车载影院';
+    let epTitle = urlParams.get('ep') || '正片';
+
     const dispTitle = document.getElementById('disp-title');
     const dispSubtitle = document.getElementById('disp-subtitle');
+    const hudTop = document.getElementById('hud-top');
+    const btnSidePrev = document.getElementById('btn-side-prev');
+    const btnSideNext = document.getElementById('btn-side-next');
+    const spinnerWrap = document.getElementById('spinner-wrap');
+    const spinnerText = document.getElementById('spinner-text');
+    const container = document.getElementById('player-container');
 
-    let hls = null;
-    let audioCtx = null;
-    let audioSrc = null;
-    let wakeLock = null;
-    let userPaused = false;
+    if (movieTitle) dispTitle.innerText = decodeURIComponent(movieTitle);
+    if (epTitle) dispSubtitle.innerText = decodeURIComponent(epTitle) + ' · 1080P 芯片硬解 (Canvas)';
+
+    // ─────────────────────────────────────────────────────────────
+    // 2. 解码预设 (Tesla-Netflix Bypass 原装配置)
+    // ─────────────────────────────────────────────────────────────
+    // 普通模式: WebCodecs 硬解 -> Canvas + AudioWorklet (完全无 video/audio 标签，通常不报“行车仅限音频”)
+    // 声音兼容(推荐): WebCodecs 硬解 -> Canvas + MSE Audio (日常首选，行车绝不黑屏)
+    const decodePresets = [
+      {
+        id: 'hardware-mse',
+        label: '声音兼容（推荐）',
+        description: '日常首选，零黑屏硬解，声音高保真。',
+        enableSimd: false,
+        enableHardware: true,
+        enableWebCodecs: true,
+        enableAudioWebcodec: true,
+        enableVideoWebcodec: true,
+        enableAudioWorklet: true,
+        audioMSE: true,
+        enableWebGPU: false
+      },
+      {
+        id: 'hardware-worklet',
+        label: '普通模式（防提示）',
+        description: '通常不显示“行车仅限音频”提示。',
+        enableSimd: false,
+        enableHardware: true,
+        enableWebCodecs: true,
+        enableAudioWebcodec: true,
+        enableVideoWebcodec: true,
+        enableAudioWorklet: true,
+        audioMSE: false,
+        enableWebGPU: false
+      },
+      {
+        id: 'software-simd-no-mse',
+        label: '旧版兼容',
+        description: '旧版车机或画面异常时尝试。',
+        enableSimd: false,
+        enableHardware: false,
+        enableWebCodecs: false,
+        enableAudioWebcodec: false,
+        enableVideoWebcodec: false,
+        enableAudioWorklet: true,
+        audioMSE: false,
+        enableWebGPU: false
+      }
+    ];
+
+    let player = null;
     let hudTimer = null;
-    let centerHudTimer = null;
-    let isDragging = false;
-    let speedLevels = [1.0, 1.25, 1.5, 2.0, 0.75];
-    let currentSpeedIdx = 0;
-    let currentPlayUrl = '';
-
-    // 看门狗：超时自动换源机制 (4秒无播放即判定线路死链)
-    let loadWatchdogTimer = null;
-    let stallWatchdogTimer = null;
-    let hlsNetworkRetryCount = 0;
-
-    function startLoadWatchdog() {
-      clearTimeout(loadWatchdogTimer);
-      loadWatchdogTimer = setTimeout(() => {
-        if (video.currentTime < 0.1 && !userPaused) {
-          console.warn('[Watchdog] 首帧加载超时(4s)，正在触发自动换源...');
-          triggerFailover('首帧连接超时');
-        }
-      }, 4000);
-    }
-
-    function clearLoadWatchdog() {
-      if (loadWatchdogTimer) {
-        clearTimeout(loadWatchdogTimer);
-        loadWatchdogTimer = null;
-      }
-    }
-
-    function triggerFailover(reason) {
-      clearLoadWatchdog();
-      clearTimeout(stallWatchdogTimer);
-      showCenterHud('⚡', `线路异常(${reason})，自动换源中...`);
-      spinnerText.innerText = `正在秒切备用线路...`;
-      spinnerWrap.style.display = 'flex';
-      notifyParent({ type: 'LINE_ERROR', reason: reason });
-    }
+    let watchdogTimer = null;
+    let wakeLock = null;
 
     // ─────────────────────────────────────────────────────────────
-    // 1. Web Audio API 声音管线 (绕过车机行车音频静音与视频检测)
-    // ─────────────────────────────────────────────────────────────
-    function initWebAudio() {
-      if (audioCtx) {
-        if (audioCtx.state === 'suspended') {
-          audioCtx.resume().catch(() => {});
-        }
-        return;
-      }
-      try {
-        const AudioCtxClass = window.AudioContext || window.webkitAudioContext;
-        if (AudioCtxClass) {
-          audioCtx = new AudioCtxClass();
-          audioSrc = audioCtx.createMediaElementSource(video);
-          audioSrc.connect(audioCtx.destination);
-          console.log('[TeslaBypass] Web Audio 桥接激活成功');
-        }
-      } catch (e) {
-        console.warn('[TeslaBypass] Web Audio 桥接提示:', e);
-      }
-    }
-
-    // ─────────────────────────────────────────────────────────────
-    // 2. 屏幕常亮 Wake Lock API
+    // 3. 屏幕常亮 Wake Lock
     // ─────────────────────────────────────────────────────────────
     async function requestWakeLock() {
       try {
         if ('wakeLock' in navigator && (!wakeLock || wakeLock.released)) {
           wakeLock = await navigator.wakeLock.request('screen');
-          wakeLock.addEventListener('release', () => {
-            wakeLock = null;
-            if (document.visibilityState === 'visible' && !userPaused) {
-              requestWakeLock();
-            }
-          });
         }
-      } catch (e) {}
+      } catch (_) {}
     }
-
-    // ─────────────────────────────────────────────────────────────
-    // 3. 核心行车防护：visibilitychange 拦截与自动恢复
-    // ─────────────────────────────────────────────────────────────
-    function handleVisibilityOrDriveShift() {
-      if (audioCtx && audioCtx.state === 'suspended') {
-        audioCtx.resume().catch(() => {});
-      }
-      if (video && video.paused && !userPaused) {
-        video.play().catch(() => {});
-      }
-      requestWakeLock();
-    }
-
-    document.addEventListener('visibilitychange', handleVisibilityOrDriveShift, true);
-    window.addEventListener('visibilitychange', handleVisibilityOrDriveShift, true);
-    window.addEventListener('focus', handleVisibilityOrDriveShift, true);
-
-    // ─────────────────────────────────────────────────────────────
-    // 4. 车载系统非自愿强制暂停拦截 (60ms 快速恢复)
-    // ─────────────────────────────────────────────────────────────
-    video.addEventListener('pause', () => {
-      updatePlayButtonUI();
-      if (!userPaused) {
-        setTimeout(() => {
-          if (!userPaused && video.paused) {
-            video.play().catch(() => {});
-          }
-        }, 60);
-      }
-    });
-
-    video.addEventListener('play', () => {
-      userPaused = false;
-      updatePlayButtonUI();
-      requestWakeLock();
-    });
-
-    video.addEventListener('playing', () => {
-      clearLoadWatchdog();
-      clearTimeout(stallWatchdogTimer);
-      spinnerWrap.style.display = 'none';
-      if (!video.muted) {
-        btnUnlockSound.style.display = 'none';
-      }
-    });
-
-    video.addEventListener('error', (e) => {
-      console.warn('[Video] 原生标签错误:', video.error);
-      triggerFailover('视频源解析异常');
+    requestWakeLock();
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'visible') requestWakeLock();
     });
 
     // ─────────────────────────────────────────────────────────────
-    // 5. 首次触控全局解锁 (音频 + 常亮)
+    // 4. HUD 自动淡出/呼出联动控制
     // ─────────────────────────────────────────────────────────────
-    function unlockOnFirstTouch() {
-      initWebAudio();
-      requestWakeLock();
-      if (video.muted) {
-        video.muted = false;
-        btnUnlockSound.style.display = 'none';
-      }
-      if (video.paused && !userPaused) {
-        video.play().catch(() => {});
-      }
-    }
-    document.addEventListener('click', unlockOnFirstTouch, { passive: true });
-    document.addEventListener('touchstart', unlockOnFirstTouch, { passive: true });
-
-    function unlockAudioManual() {
-      initWebAudio();
-      if (audioCtx && audioCtx.state === 'suspended') {
-        audioCtx.resume().catch(() => {});
-      }
-      video.muted = false;
-      video.play().then(() => {
-        btnUnlockSound.style.display = 'none';
-        showCenterHud('🔊', '声音已开启');
-      }).catch(() => {});
-    }
-
-    // ─────────────────────────────────────────────────────────────
-    // 6. 流媒体加载器 (Hls.js / Native MP4，1080P 档位锁定)
-    // ─────────────────────────────────────────────────────────────
-    function loadStream(url, title, epTitle) {
-      if (!url) return;
-      currentPlayUrl = url;
-      if (title) dispTitle.innerText = title;
-      if (epTitle) dispSubtitle.innerText = epTitle + ' · 1080P 极速硬解';
-
-      hlsNetworkRetryCount = 0;
-      spinnerText.innerText = '正在极速加载...';
-      spinnerWrap.style.display = 'flex';
-      btnUnlockSound.style.display = 'none';
-
-      startLoadWatchdog();
-
-      if (hls) {
-        try { hls.destroy(); } catch (_) {}
-        hls = null;
-      }
-      video.pause();
-      video.removeAttribute('src');
-      video.load();
-
-      let targetUrl = url;
-      if (url.includes('/proxy') && url.includes('u=')) {
-        try {
-          const m = url.match(/[?&]u=([^&]+)/);
-          if (m) targetUrl = decodeURIComponent(m[1]);
-        } catch (_) {}
-      }
-      let isHls = /\.m3u8(?:$|[?#&])/i.test(targetUrl) || 
-                  /\.m3u8(?:$|[?#&])/i.test(url) || 
-                  /hls/i.test(targetUrl) || 
-                  targetUrl.includes('/doapi/m3u8') || 
-                  url.includes('/doapi/m3u8');
-
-      if (isHls && window.Hls && Hls.isSupported()) {
-        hls = new Hls({
-          enableWorker: true,
-          lowLatencyMode: false,
-          backBufferLength: 60,
-          maxBufferLength: 45,
-          maxMaxBufferLength: 90,
-          fragLoadingTimeOut: 10000,
-          manifestLoadingTimeOut: 8000,
-        });
-        hls.loadSource(url);
-        hls.attachMedia(video);
-
-        hls.on(Hls.Events.MANIFEST_PARSED, (ev, data) => {
-          if (data && data.levels && data.levels.length > 1) {
-            let bestIdx = -1;
-            let bestDiff = 999999;
-            data.levels.forEach((lvl, idx) => {
-              const h = lvl.height || 0;
-              const diff = Math.abs(h - 1080);
-              if (diff < bestDiff) {
-                bestDiff = diff;
-                bestIdx = idx;
-              }
-            });
-            if (bestIdx >= 0) {
-              hls.currentLevel = bestIdx;
-            }
-          }
-          attemptPlay();
-        });
-
-        hls.on(Hls.Events.ERROR, (ev, data) => {
-          if (data.fatal) {
-            console.warn('[HLS] Fatal error:', data.type, data.details);
-            switch (data.type) {
-              case Hls.ErrorTypes.NETWORK_ERROR:
-                hlsNetworkRetryCount++;
-                if (hlsNetworkRetryCount <= 1) {
-                  hls.startLoad();
-                } else {
-                  triggerFailover('HLS网络源异常');
-                }
-                break;
-              case Hls.ErrorTypes.MEDIA_ERROR:
-                hls.recoverMediaError();
-                break;
-              default:
-                triggerFailover('HLS播放失败');
-                break;
-            }
-          }
-        });
-      } else {
-        video.src = url;
-        video.load();
-        attemptPlay();
-      }
-    }
-
-    function attemptPlay() {
-      userPaused = false;
-      // 策略一：尝试正常有声播放
-      video.play().then(() => {
-        spinnerWrap.style.display = 'none';
-        btnUnlockSound.style.display = 'none';
-      }).catch(err => {
-        console.warn('[Video] 有声自动播放受策略限制，平滑降级为静音秒开:', err);
-        // 策略二：静音秒开（现代浏览器 100% 放行），绝不黑屏！
-        video.muted = true;
-        video.play().then(() => {
-          spinnerWrap.style.display = 'none';
-          btnUnlockSound.style.display = 'inline-flex';
-          showCenterHud('🔊', '轻触屏幕开启声音');
-        }).catch(err2 => {
-          console.warn('[Video] 静音播放依然受阻:', err2);
-          triggerFailover('自动播放失败');
-        });
-      });
-    }
-
-    // ─────────────────────────────────────────────────────────────
-    // 7. HUD 显示与自动隐藏
-    // ─────────────────────────────────────────────────────────────
-    function showHud() {
-      hudOverlay.classList.remove('hidden');
-      resetHudTimer();
-    }
-
-    function hideHud() {
-      if (!isDragging && !video.paused) {
-        hudOverlay.classList.add('hidden');
-      }
-    }
-
-    function resetHudTimer() {
+    function showHUD() {
+      hudTop.classList.remove('hidden');
+      btnSidePrev.classList.remove('hidden');
+      btnSideNext.classList.remove('hidden');
       clearTimeout(hudTimer);
       hudTimer = setTimeout(() => {
-        hideHud();
-      }, 3500);
-    }
-
-    function toggleHud() {
-      if (hudOverlay.classList.contains('hidden')) {
-        showHud();
-      } else {
-        hideHud();
-      }
-    }
-
-    document.getElementById('player-root').addEventListener('click', (e) => {
-      if (e.target.closest('.hud-overlay > *')) return;
-      toggleHud();
-    });
-
-    function showCenterHud(icon, text) {
-      centerHudIcon.innerText = icon;
-      centerHudText.innerText = text;
-      centerHud.classList.add('show');
-      clearTimeout(centerHudTimer);
-      centerHudTimer = setTimeout(() => {
-        centerHud.classList.remove('show');
-      }, 1200);
-    }
-
-    // ─────────────────────────────────────────────────────────────
-    // 8. 播放与进度条控制
-    // ─────────────────────────────────────────────────────────────
-    function togglePlayPause() {
-      initWebAudio();
-      if (video.paused) {
-        userPaused = false;
-        video.play().catch(() => {});
-        showCenterHud('▶', '播放');
-      } else {
-        userPaused = true;
-        video.pause();
-        showCenterHud('⏸', '暂停');
-        showHud();
-      }
-      updatePlayButtonUI();
-    }
-
-    function updatePlayButtonUI() {
-      if (video.paused) {
-        btnPlay.innerText = '▶ 播放';
-        btnPlay.style.background = 'linear-gradient(135deg, #10b981, #059669)';
-      } else {
-        btnPlay.innerText = '⏸ 暂停';
-        btnPlay.style.background = 'linear-gradient(135deg, #00e5ff, #0284c7)';
-      }
-    }
-
-    function seekRelative(seconds) {
-      showHud();
-      const target = Math.max(0, Math.min(video.duration || 0, video.currentTime + seconds));
-      video.currentTime = target;
-      if (seconds > 0) {
-        showCenterHud('⏩', `+${seconds}s`);
-      } else {
-        showCenterHud('⏪', `${seconds}s`);
-      }
-    }
-
-    function cycleSpeed() {
-      currentSpeedIdx = (currentSpeedIdx + 1) % speedLevels.length;
-      const rate = speedLevels[currentSpeedIdx];
-      video.playbackRate = rate;
-      btnSpeed.innerText = rate + 'x';
-      showCenterHud('⚡', `${rate}x 倍速`);
-      resetHudTimer();
-    }
-
-    function formatTime(sec) {
-      if (!sec || isNaN(sec)) return '00:00';
-      const m = Math.floor(sec / 60);
-      const s = Math.floor(sec % 60);
-      return (m < 10 ? '0' : '') + m + ':' + (s < 10 ? '0' : '') + s;
-    }
-
-    video.addEventListener('timeupdate', () => {
-      if (video.currentTime > 0.1) {
-        clearLoadWatchdog();
-        spinnerWrap.style.display = 'none';
-      }
-      if (!isDragging && video.duration) {
-        const pct = (video.currentTime / video.duration) * 100;
-        progressPlayed.style.width = pct + '%';
-        progressThumb.style.left = pct + '%';
-        timeCur.innerText = formatTime(video.currentTime);
-        timeDur.innerText = formatTime(video.duration);
-      }
-      if (video.buffered && video.buffered.length > 0 && video.duration) {
-        const bufferedEnd = video.buffered.end(video.buffered.length - 1);
-        const bufPct = (bufferedEnd / video.duration) * 100;
-        progressBuffered.style.width = bufPct + '%';
-      }
-    });
-
-    video.addEventListener('waiting', () => {
-      spinnerWrap.style.display = 'flex';
-      clearTimeout(stallWatchdogTimer);
-      stallWatchdogTimer = setTimeout(() => {
-        if (video.paused || video.readyState < 3) {
-          triggerFailover('中途缓冲卡顿超时');
+        if (player && player.isPlaying) {
+          hudTop.classList.add('hidden');
+          btnSidePrev.classList.add('hidden');
+          btnSideNext.classList.add('hidden');
         }
-      }, 6000);
-    });
+      }, 4500);
+    }
 
-    video.addEventListener('ended', () => {
-      handleNext();
-    });
+    container.addEventListener('pointermove', showHUD);
+    container.addEventListener('pointerdown', showHUD);
+    container.addEventListener('click', showHUD);
 
     // ─────────────────────────────────────────────────────────────
-    // 9. 触摸进度条拖动
+    // 5. 看门狗：超时自动换源机制 (5秒无首帧自动向宿主请求下一条线路)
     // ─────────────────────────────────────────────────────────────
-    function setSeekFromEvent(e) {
-      const rect = progressTrack.getBoundingClientRect();
-      const clientX = e.touches ? e.touches[0].clientX : e.clientX;
-      const offsetX = Math.max(0, Math.min(rect.width, clientX - rect.left));
-      const pct = offsetX / rect.width;
-      if (video.duration) {
-        const seekTime = pct * video.duration;
-        video.currentTime = seekTime;
-        progressPlayed.style.width = (pct * 100) + '%';
-        progressThumb.style.left = (pct * 100) + '%';
-        timeCur.innerText = formatTime(seekTime);
+    function startWatchdog() {
+      clearTimeout(watchdogTimer);
+      watchdogTimer = setTimeout(() => {
+        if (!player || player.currentTime < 100) {
+          console.warn('[Watchdog] 首帧加载超时(5s)，触发自动换源...');
+          triggerFailover('首帧连接超时');
+        }
+      }, 5000);
+    }
+
+    function clearWatchdog() {
+      if (watchdogTimer) {
+        clearTimeout(watchdogTimer);
+        watchdogTimer = null;
       }
     }
 
-    progressTrack.addEventListener('mousedown', (e) => {
-      isDragging = true;
-      setSeekFromEvent(e);
-      resetHudTimer();
-    });
-    window.addEventListener('mousemove', (e) => {
-      if (isDragging) {
-        setSeekFromEvent(e);
-        resetHudTimer();
-      }
-    });
-    window.addEventListener('mouseup', () => {
-      if (isDragging) {
-        isDragging = false;
-        resetHudTimer();
-      }
-    });
-
-    progressTrack.addEventListener('touchstart', (e) => {
-      isDragging = true;
-      setSeekFromEvent(e);
-      resetHudTimer();
-    }, { passive: false });
-    window.addEventListener('touchmove', (e) => {
-      if (isDragging) {
-        setSeekFromEvent(e);
-        resetHudTimer();
-      }
-    }, { passive: false });
-    window.addEventListener('touchend', () => {
-      if (isDragging) {
-        isDragging = false;
-        resetHudTimer();
-      }
-    });
-
-    // ─────────────────────────────────────────────────────────────
-    // 10. 全屏、上下集与退出控制
-    // ─────────────────────────────────────────────────────────────
-    function toggleFullscreen() {
-      const el = document.documentElement;
-      if (!document.fullscreenElement && !document.webkitFullscreenElement) {
-        if (el.requestFullscreen) el.requestFullscreen();
-        else if (el.webkitRequestFullscreen) el.webkitRequestFullscreen();
-        showCenterHud('⛶', '全屏模式');
-      } else {
-        if (document.exitFullscreen) document.exitFullscreen();
-        else if (document.webkitExitFullscreen) document.webkitExitFullscreen();
-        showCenterHud('❐', '窗口模式');
-      }
-    }
-
-    function handlePrev() {
-      notifyParent({ type: 'REQUEST_PREV' });
-    }
-
-    function handleNext() {
-      notifyParent({ type: 'REQUEST_NEXT' });
-    }
-
-    function handleExit() {
-      notifyParent({ type: 'CLOSE' });
-    }
-
-    function openParentDrawer(drawerId) {
-      notifyParent({ type: 'OPEN_DRAWER', drawer: drawerId });
+    function triggerFailover(reason) {
+      clearWatchdog();
+      spinnerWrap.style.display = 'flex';
+      spinnerText.innerText = `线路连接超时，正在秒切备用线路...`;
+      notifyParent({ type: 'LINE_ERROR', reason: reason });
     }
 
     // ─────────────────────────────────────────────────────────────
-    // 11. 与父级 car.html 双向通信
+    // 6. 核心播放流加载与事件订阅
     // ─────────────────────────────────────────────────────────────
-    function notifyParent(data) {
+    async function initPlayer() {
+      try {
+        spinnerWrap.style.display = 'flex';
+        spinnerText.innerText = '正在启动车载芯片硬件解码器...';
+
+        player = new TeslaPlayer({
+          container: container,
+          loop: false,
+          decodePresetOptions: decodePresets,
+          decodePresetId: 'hardware-mse',
+          showSeekButtons: true,
+          showPlaybackRate: true,
+          showSettings: true,
+          controlsAlwaysVisible: false,
+          onToggleFullscreen() {
+            window.toggleFullscreen();
+          }
+        });
+
+        // 订阅播放器底层事件
+        player.on('time', (timeMs) => {
+          clearWatchdog();
+          spinnerWrap.style.display = 'none';
+          notifyParent({
+            type: 'TIME_UPDATE',
+            currentTime: (Number(timeMs) || 0) / 1000,
+            duration: (Number(player.duration) || 0) / 1000
+          });
+        });
+
+        player.on('ended', () => {
+          console.log('[Player] 本集播放结束，自动下一集');
+          notifyParent({ type: 'REQUEST_NEXT' });
+        });
+
+        player.on('error', (err) => {
+          console.warn('[Player] 视频流错误:', err);
+          triggerFailover('视频流解码异常');
+        });
+
+        // 监听底层控制器显示状态，保持顶栏 HUD 步调一致
+        if (player.controller) {
+          const obs = new MutationObserver(() => {
+            if (player.controller.style.visibility === 'visible' || player.controller.style.opacity === '1') {
+              showHUD();
+            }
+          });
+          obs.observe(player.controller, { attributes: true, attributeFilter: ['style', 'class'] });
+        }
+
+        if (streamUrl) {
+          await loadStream(streamUrl);
+        }
+      } catch (err) {
+        console.error('[Player] 初始化失败:', err);
+        triggerFailover('播放器内核启动异常');
+      }
+    }
+
+    async function loadStream(url) {
+      if (!player) return;
+      streamUrl = url;
+      spinnerWrap.style.display = 'flex';
+      spinnerText.innerText = '正在载入 1080P 硬件直解流...';
+      startWatchdog();
+
+      try {
+        await player.loadSource(url, { isLive: false });
+        clearWatchdog();
+        spinnerWrap.style.display = 'none';
+      } catch (e) {
+        console.warn('[Player] loadSource 失败:', e);
+        triggerFailover('源地址连接断开');
+      }
+    }
+
+    // ─────────────────────────────────────────────────────────────
+    // 7. 宿主通信协议 (与外部 car.html 无缝互通)
+    // ─────────────────────────────────────────────────────────────
+    function notifyParent(msg) {
       try {
         if (window.parent && window.parent !== window) {
-          window.parent.postMessage(data, '*');
+          window.parent.postMessage(msg, '*');
         }
       } catch (_) {}
     }
@@ -1016,49 +496,32 @@
     window.addEventListener('message', (ev) => {
       const data = ev.data;
       if (!data || typeof data !== 'object') return;
-      switch (data.type) {
-        case 'LOAD_URL':
-          if (data.url) {
-            clearLoadWatchdog();
-            clearTimeout(stallWatchdogTimer);
-            loadStream(data.url, data.title, data.epTitle);
-          }
-          break;
-        case 'PLAY':
-          userPaused = false;
-          video.play().catch(() => {});
-          break;
-        case 'PAUSE':
-          userPaused = true;
-          video.pause();
-          break;
-        case 'SEEK':
-          if (typeof data.time === 'number') {
-            video.currentTime = data.time;
-          }
-          break;
-        case 'SET_RATE':
-          if (typeof data.rate === 'number') {
-            video.playbackRate = data.rate;
-          }
-          break;
+      if (data.type === 'LOAD_URL') {
+        if (data.title) dispTitle.innerText = decodeURIComponent(data.title);
+        if (data.epTitle) dispSubtitle.innerText = decodeURIComponent(data.epTitle) + ' · 1080P 芯片硬解 (Canvas)';
+        loadStream(data.url);
       }
     });
 
-    // ─────────────────────────────────────────────────────────────
-    // 12. 初始化入口
-    // ─────────────────────────────────────────────────────────────
-    window.addEventListener('DOMContentLoaded', () => {
-      const params = new URLSearchParams(window.location.search);
-      const url = params.get('url');
-      const title = params.get('title') || '车载影院';
-      const ep = params.get('ep') || '正片';
-      if (url) {
-        loadStream(url, title, ep);
+    // 窗口快捷操作函数
+    window.handleExit = () => notifyParent({ type: 'CLOSE' });
+    window.handlePrev = () => notifyParent({ type: 'REQUEST_PREV' });
+    window.handleNext = () => notifyParent({ type: 'REQUEST_NEXT' });
+    window.openParentDrawer = (drawer) => notifyParent({ type: 'OPEN_DRAWER', drawer: drawer });
+    window.toggleFullscreen = () => {
+      if (!document.fullscreenElement) {
+        document.documentElement.requestFullscreen().catch(() => {});
+      } else {
+        document.exitFullscreen().catch(() => {});
       }
-      showHud();
-      notifyParent({ type: 'READY' });
-    });
+    };
+
+    // 页面加载启动
+    if (document.readyState === 'loading') {
+      document.addEventListener('DOMContentLoaded', initPlayer);
+    } else {
+      initPlayer();
+    }
   </script>
 </body>
 </html>

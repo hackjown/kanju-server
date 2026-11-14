@@ -1747,6 +1747,33 @@ def api_home_rails():
                     "short": rail({"kind": "short_drama"}, "short")})
 
 
+@app.route("/wasm/<path:filename>")
+def serve_wasm(filename):
+    wasm_dir = os.path.join(HERE, "static", "wasm")
+    file_path = os.path.join(wasm_dir, filename)
+    if os.path.exists(file_path):
+        resp = send_from_directory(wasm_dir, filename)
+        resp.headers["Content-Type"] = "application/wasm"
+        resp.headers["Access-Control-Allow-Origin"] = "*"
+        return resp
+    try:
+        import urllib.request
+        remote_url = f"https://tesla-player.com/wasm/{filename}"
+        req = urllib.request.Request(remote_url, headers={
+            "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "Referer": "https://tesla-player.com/"
+        })
+        with urllib.request.urlopen(req, timeout=5) as r:
+            data = r.read()
+            with open(file_path, "wb") as f:
+                f.write(data)
+            resp = Response(data, mimetype="application/wasm")
+            resp.headers["Access-Control-Allow-Origin"] = "*"
+            return resp
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 404
+
+
 @app.route("/car/player_frame")
 def car_player_frame():
     resp = send_from_directory(os.path.join(HERE, "static"), "car_player_frame.html")

@@ -2092,7 +2092,13 @@
           prevEpisode();
           break;
         case 'REQUEST_NEXT':
+        case 'ENDED':
+        case 'ended':
           nextEpisode();
+          break;
+        case 'TOGGLE_FULLSCREEN':
+        case 'toggle-fullscreen':
+          toggleFullscreen();
           break;
         case 'CLOSE':
           closePlayer();
