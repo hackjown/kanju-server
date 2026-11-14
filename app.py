@@ -53,6 +53,13 @@ try:
 except Exception as _e:
     print('[tvcast] 初始化失败:', _e)
 
+# iOS App（H5Shell 壳）选服务器页与启动配置
+try:
+    import juchang8_appshell
+    juchang8_appshell.register(app)
+except Exception as _e:
+    print('[appshell] 初始化失败:', _e)
+
 
 @app.errorhandler(500)
 def handle_500(e):
@@ -2215,6 +2222,15 @@ def get_catalog_cache(key):
         pass
     return None
 
+def _quota_reset_at():
+    """额度重置时间（北京时间次日 0 点，ISO8601 UTC），前端要求 reset_at 为字符串。"""
+    import datetime as _dt
+    tz = _dt.timezone(_dt.timedelta(hours=8))
+    now = _dt.datetime.now(tz)
+    nxt = (now + _dt.timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
+    return nxt.astimezone(_dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.000Z")
+
+
 @app.route("/v1/<path:subpath>", methods=["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"])
 def proxy_v1(subpath):
     if request.method == "OPTIONS":
@@ -2519,11 +2535,13 @@ def proxy_v1(subpath):
             growth = u.get("growth", 0)
             level = u.get("level", 1)
             resp = jsonify({
-                "object": "user.quota",
+                "object": "user.daily_token_quota",
                 "authenticated": True,
                 "remaining_tokens": tokens,
                 "limit_tokens": 1800000,
                 "used_tokens": 0,
+                "reserved_tokens": 0,
+                "reset_at": _quota_reset_at(),
                 "base_limit_tokens": 1800000,
                 "bonus_tokens": 0,
                 "consumption_multiplier_bps": 5000,
@@ -2550,10 +2568,13 @@ def proxy_v1(subpath):
             })
         else:
             resp = jsonify({
-                "object": "user.quota",
+                "object": "user.daily_token_quota",
                 "authenticated": False,
                 "remaining_tokens": 0,
                 "limit_tokens": 0,
+                "used_tokens": 0,
+                "reserved_tokens": 0,
+                "reset_at": _quota_reset_at(),
                 "feature_access": {
                     "midnight_theater": {
                         "announcement_pending": False,

@@ -16,6 +16,7 @@ TV 端（Juchang8TV APK）选择本服务器后连接：  ws(s)://<本服务器>
 """
 import base64
 import json
+import sys
 import os
 import random
 import secrets
@@ -288,10 +289,48 @@ class Api:
         self._feed = None
         self._feed_at = 0
 
-    def get(self, path, timeout=None):
+    def get(self, path, timeout=None, headers=None):
         with self.app.test_client() as c:
-            r = c.get(path, environ_base={"REMOTE_ADDR": "127.0.0.1"})
+            r = c.get(path, environ_base={"REMOTE_ADDR": "127.0.0.1"}, headers=headers or {})
             return r.status_code, r.get_json(silent=True)
+
+    def probe(self, path, timeout=15):
+        """试播网盘线路：返回 (可用, 最终地址)。在线程里跑，超时视为不可用。"""
+        box = {}
+
+        def run():
+            try:
+                with self.app.test_client() as c:
+                    r = c.get(path, environ_base={"REMOTE_ADDR": "127.0.0.1"}, buffered=False)
+                    loc = r.headers.get("Location") or ""
+                    if r.status_code in (301, 302, 303, 307, 308):
+                        ok = "/proxy" in loc or any(k in loc for k in ("115", "quark", "cpats", "uc.cn"))
+                        box["r"] = (ok, loc if ok else None)
+                    elif r.status_code == 200:
+                        head = b""
+                        try:
+                            for chunk in r.response:
+                                head += chunk if isinstance(chunk, bytes) else str(chunk).encode()
+                                if len(head) > 64:
+                                    break
+                        except Exception:
+                            pass
+                        ok = b"#EXTM3U" in head or len(head) > 0
+                        box["r"] = (ok, None)
+                    else:
+                        box["r"] = (False, None)
+                    try:
+                        r.close()
+                    except Exception:
+                        pass
+            except Exception as e:
+                print("[tvcast] 网盘试播出错:", repr(e))
+                box["r"] = (False, None)
+
+        t = threading.Thread(target=run, daemon=True)
+        t.start()
+        t.join(timeout)
+        return box.get("r", (False, None))
 
     def post(self, path, body):
         with self.app.test_client() as c:
@@ -435,26 +474,57 @@ def _resolve_line(lo):
     return None, None
 
 
+def _is_pan(lo):
+    return str(lo.get("id", "")).startswith("local:pan:") or bool(lo.get("is_pan"))
+
+
+def _tier(lo):
+    """播放顺序：0 本站网盘 → 1 kanju 4K → 2 本站 4K 采集 → 3 普通源"""
+    if _is_pan(lo):
+        return 0
+    if lo.get("provider_id") == "local_collector":
+        return 2 if lo.get("is_4k") else 3
+    return 1 if lo.get("is_4k") else 3
+
+
 def _pick_lines(lines, want_id=None, pref=None):
-    """返回按优先级排好的候选线路"""
-    def usable(lo):
-        return not str(lo.get("id", "")).startswith("local:pan:")
+    """返回按优先级排好的候选线路（网盘 → kanju 4K → 本站 4K → 普通）"""
+    ordered = sorted(lines, key=lambda lo: (_tier(lo), 1 if str(lo.get("id", "")).endswith(":guide") else 0,
+                                           -(lo.get("preference_weight") or 0)))
     if want_id:
         hit = [lo for lo in lines if lo.get("id") == want_id or lo.get("playback_source_id") == want_id]
         if hit:
-            return hit + [lo for lo in lines if lo not in hit and usable(lo)]
+            return hit + [lo for lo in ordered if lo not in hit]
     if pref:
         hit = [lo for lo in lines if lo.get("provider_id") == pref.get("provider_id")
                and (not pref.get("play_from") or lo.get("play_from") == pref.get("play_from"))]
         if hit:
-            return hit + [lo for lo in lines if lo not in hit and usable(lo)]
-    cand = [lo for lo in lines if usable(lo)]
+            return hit + [lo for lo in ordered if lo not in hit]
+    return ordered
 
-    def key(lo):
-        direct = bool(lo.get("url")) and not str(lo.get("url")).startswith("resolve://")
-        return (0 if lo.get("selected") else 1, 0 if lo.get("default_priority") else 1,
-                0 if direct else 1, -(lo.get("preference_weight") or 0))
-    return sorted(cand, key=key)
+
+def _app_globals():
+    """拿到 app.py 的全局变量（python app.py 运行时它是 __main__）"""
+    for name in ("__main__", "app"):
+        mod = sys.modules.get(name)
+        if mod is not None and hasattr(mod, "_EP_TOKEN_MAP"):
+            return mod
+    return None
+
+
+def _remember_tokens(vid, title, eps):
+    """把片名和集数登记给 app.py，播放解析时才能搜网盘源、匹配本站采集源（以前只有网页端播放会登记）"""
+    mod = _app_globals()
+    if not mod or not title:
+        return
+    try:
+        mod._CID_TO_TITLE[vid] = title
+        for e in eps:
+            if e.get("token"):
+                mod._EP_TOKEN_MAP[e["token"]] = {"title": title, "ep_num": e.get("episode_number") or 1,
+                                                 "ep_title": e.get("display_name") or ""}
+    except Exception as ex:
+        print("[tvcast] 登记片名失败:", repr(ex))
 
 
 def build_entry(conn, req, with_episodes=True):
@@ -481,14 +551,29 @@ def build_entry(conn, req, with_episodes=True):
     ep_token = tok or (ep or {}).get("token")
     if not ep_token:
         raise ReqError("http_404", "影片播放信息不存在或已下线，请选择其他影片。")
-    st, res = API.get(f"/v1/playback/resolve/{urllib.parse.quote(ep_token, safe='')}")
+    _remember_tokens(vid, cat.get("title") or "", all_eps)
+    st, res = API.get(f"/v1/playback/resolve/{urllib.parse.quote(ep_token, safe='')}",
+                      headers={"Referer": f"http://127.0.0.1/player/{urllib.parse.quote(vid, safe='')}"})
     if st != 200 or not isinstance(res, dict):
         raise ReqError("http_%s" % st, "获取播放线路失败，请稍后重试。")
     cur = res.get("current_episode") or {}
     lines = res.get("line_options") or []
     url, kind, chosen = None, None, None
-    for lo in _pick_lines(lines, req.get("line"), req.get("line_preference"))[:4]:
-        url, kind = _resolve_line(lo)
+    tried_other = 0
+    for lo in _pick_lines(lines, req.get("line"), req.get("line_preference")):
+        if _is_pan(lo):
+            if str(lo.get("id", "")).endswith(":guide") and any(_is_pan(x) and x is not lo for x in lines):
+                continue
+            ok, final = API.probe(lo.get("url") or "")
+            if not ok:
+                print("[tvcast] 网盘线路不可用，换下一条:", lo.get("label"))
+                continue
+            url, kind = (final or lo.get("url")), _kind(lo.get("url_kind"), lo.get("url") or "")
+        else:
+            if tried_other >= 4:
+                break
+            tried_other += 1
+            url, kind = _resolve_line(lo)
         if url:
             chosen = lo
             break
