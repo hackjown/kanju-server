@@ -272,7 +272,8 @@
     // 1. 初始化参数解析与状态管理
     // ─────────────────────────────────────────────────────────────
     const urlParams = new URLSearchParams(window.location.search);
-    let streamUrl = urlParams.get('url') || '';
+    let rawUrl = urlParams.get('url') || '';
+    let streamUrl = rawUrl ? (rawUrl.startsWith('http') ? rawUrl : new URL(rawUrl, window.location.href).href) : '';
     let movieTitle = urlParams.get('title') || '车载影院';
     let epTitle = urlParams.get('ep') || '正片';
 
@@ -339,6 +340,7 @@
     let hudTimer = null;
     let watchdogTimer = null;
     let wakeLock = null;
+    let hasReceivedFirstTime = false;
 
     // ─────────────────────────────────────────────────────────────
     // 3. 屏幕常亮 Wake Lock
@@ -377,16 +379,16 @@
     container.addEventListener('click', showHUD);
 
     // ─────────────────────────────────────────────────────────────
-    // 5. 看门狗：超时自动换源机制 (5秒无首帧自动向宿主请求下一条线路)
+    // 5. 看门狗：超时自动换源机制 (10秒无首帧自动向宿主请求下一条线路)
     // ─────────────────────────────────────────────────────────────
     function startWatchdog() {
-      clearTimeout(watchdogTimer);
+      clearWatchdog();
       watchdogTimer = setTimeout(() => {
-        if (!player || player.currentTime < 100) {
-          console.warn('[Watchdog] 首帧加载超时(5s)，触发自动换源...');
+        if (!hasReceivedFirstTime) {
+          console.warn('[Watchdog] 首帧加载超时(10s)，触发自动换源...');
           triggerFailover('首帧连接超时');
         }
-      }, 5000);
+      }, 10000);
     }
 
     function clearWatchdog() {
@@ -427,6 +429,7 @@
 
         // 订阅播放器底层事件
         player.on('time', (timeMs) => {
+          hasReceivedFirstTime = true;
           clearWatchdog();
           spinnerWrap.style.display = 'none';
           notifyParent({
@@ -456,6 +459,8 @@
           obs.observe(player.controller, { attributes: true, attributeFilter: ['style', 'class'] });
         }
 
+        notifyParent({ type: 'FRAME_READY' });
+
         if (streamUrl) {
           await loadStream(streamUrl);
         }
@@ -466,16 +471,16 @@
     }
 
     async function loadStream(url) {
-      if (!player) return;
-      streamUrl = url;
+      if (!player || !url) return;
+      const targetUrl = url.startsWith('http') ? url : new URL(url, window.location.href).href;
+      streamUrl = targetUrl;
+      hasReceivedFirstTime = false;
       spinnerWrap.style.display = 'flex';
       spinnerText.innerText = '正在载入 1080P 硬件直解流...';
       startWatchdog();
 
       try {
-        await player.loadSource(url, { isLive: false });
-        clearWatchdog();
-        spinnerWrap.style.display = 'none';
+        await player.loadSource(targetUrl, { isLive: false }, true);
       } catch (e) {
         console.warn('[Player] loadSource 失败:', e);
         triggerFailover('源地址连接断开');
@@ -499,7 +504,9 @@
       if (data.type === 'LOAD_URL') {
         if (data.title) dispTitle.innerText = decodeURIComponent(data.title);
         if (data.epTitle) dispSubtitle.innerText = decodeURIComponent(data.epTitle) + ' · 1080P 芯片硬解 (Canvas)';
-        loadStream(data.url);
+        if (data.url) {
+          loadStream(data.url);
+        }
       }
     });
 

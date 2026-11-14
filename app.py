@@ -708,7 +708,8 @@ def proxy_m3u8_directly(u, ref):
             h["Cookie"] = ck_quark
 
     def wrap(absu, r):
-        return "/proxy?u=" + up.quote(absu, safe="") + "&ref=" + up.quote(r, safe="")
+        prefix = request.host_url.rstrip("/") if request else ""
+        return prefix + "/proxy?u=" + up.quote(absu, safe="") + "&ref=" + up.quote(r, safe="")
 
     try:
         r = _sess.get(u, headers=h, timeout=25, allow_redirects=True)

@@ -2049,6 +2049,9 @@
       if (audio && typeof audio.pause === 'function') { audio.pause(); audio.removeAttribute('src'); }
 
       let cleanUrl = url;
+      if (cleanUrl.startsWith('/')) {
+        cleanUrl = window.location.origin + cleanUrl;
+      }
       if ((cleanUrl.includes('/play/') || cleanUrl.includes('/share/')) && !cleanUrl.includes('.m3u8') && !cleanUrl.includes('.mp4')) {
         cleanUrl = cleanUrl.replace(/\/+$/, '') + '/index.m3u8';
       }
@@ -2078,7 +2081,6 @@
             return;
           } catch (_) {}
         }
-        iframe.setAttribute('data-loaded', 'true');
         iframe.src = frameSrc;
       }
     }
@@ -2088,6 +2090,11 @@
       const data = ev.data;
       if (!data || typeof data !== 'object') return;
       switch (data.type) {
+        case 'FRAME_READY':
+          console.log('[Host] 播放器 iframe 已就绪');
+          const ifr = document.getElementById('car-player-frame');
+          if (ifr) ifr.setAttribute('data-loaded', 'true');
+          break;
         case 'REQUEST_PREV':
           prevEpisode();
           break;
@@ -2473,8 +2480,8 @@
       }
 
       let probeUrl = u;
-      if (probeUrl.startsWith('http') && !probeUrl.includes(window.location.host) && !probeUrl.includes('127.0.0.1') && !probeUrl.includes('/proxy?')) {
-        probeUrl = '/proxy?u=' + encodeURIComponent(probeUrl);
+      if (window.location.protocol === 'https:' && probeUrl.startsWith('http://')) {
+        probeUrl = window.location.origin + '/proxy?u=' + encodeURIComponent(probeUrl);
       }
       const t0 = performance.now();
       try {
@@ -2495,6 +2502,16 @@
         }
         return { ...line, latency: 99999, available: false, effectiveUrl: u };
       } catch (e) {
+        try {
+          const proxyProbe = window.location.origin + '/proxy?u=' + encodeURIComponent(u);
+          const ctrl2 = new AbortController();
+          const tid2 = setTimeout(() => ctrl2.abort(), 1800);
+          const resp2 = await fetch(proxyProbe, { method: 'HEAD', signal: ctrl2.signal });
+          clearTimeout(tid2);
+          if (resp2.ok || resp2.status === 200) {
+            return { ...line, latency: Math.max(30, Math.round(performance.now() - t0)), available: true, effectiveUrl: u, needProxy: true };
+          }
+        } catch (_) {}
         return { ...line, latency: 99999, available: false, effectiveUrl: u };
       }
     }
@@ -2632,14 +2649,20 @@
       const latBadge = (line.latency && line.latency < 5000) ? ` ${line.latency}ms` : '';
       if (nameEl) nameEl.innerText = cleanName + latBadge;
 
-      let playUrl = line.url;
+      let playUrl = line.url || '';
       // 自动修正网页包裹层 /play/ 或 /share/ 直达真正流媒体地址
       if (playUrl && (playUrl.includes('/play/') || playUrl.includes('/share/')) && !playUrl.includes('.m3u8') && !playUrl.includes('.mp4')) {
         playUrl = playUrl.replace(/\/+$/, '') + '/index.m3u8';
       }
-      // 检查是否需要代理
-      if (playUrl && playUrl.startsWith('http') && !playUrl.includes('127.0.0.1') && !playUrl.includes(window.location.host) && !playUrl.includes('/proxy?')) {
-        playUrl = '/proxy?u=' + encodeURIComponent(playUrl);
+
+      // 直连优先原则：绝大多数源原生支持 CORS，直连播放速度最快（0 本地代理损耗）
+      // 仅在混合内容（HTTPS页面+HTTP源）或需要网盘鉴权/探针标记需要代理时，才走本地代理
+      const isMixedContent = window.location.protocol === 'https:' && playUrl.startsWith('http://');
+      const isPanAuthRequired = playUrl.includes('115.com') || playUrl.includes('quark.cn') || playUrl.includes('115cdn');
+      if (line.needProxy || isMixedContent || isPanAuthRequired) {
+        playUrl = window.location.origin + '/proxy?u=' + encodeURIComponent(playUrl);
+      } else if (playUrl.startsWith('/')) {
+        playUrl = window.location.origin + playUrl;
       }
       playMediaSource(playUrl);
     }
