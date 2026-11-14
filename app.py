@@ -496,6 +496,16 @@ def api_car_play(token):
         s = (s or "").upper()
         return ("4K" in s) or ("2160" in s) or ("极高" in (s or "")) or ("蓝光" in (s or ""))
 
+    def _is_junk_url(url_str):
+        if not url_str or not isinstance(url_str, str):
+            return True
+        us = url_str.lower().split("?")[0]
+        if any(us.endswith(ext) for ext in (".jpg", ".jpeg", ".png", ".webp", ".gif", ".html", ".htm", ".bmp")):
+            return True
+        if any(k in url_str.lower() for k in ("byteimg.com", "image.image", "tplv-", "youku.com/v_show", "iqiyi.com/v_", "v.qq.com/x/cover", "bilibili.com/video")):
+            return True
+        return False
+
     for ln in raw_lines:
         u = ln.get("url") or ""
         lbl = ln.get("display_label") or ln.get("label") or ln.get("provider_name") or ""
@@ -526,7 +536,7 @@ def api_car_play(token):
                 except Exception:
                     pass
 
-        if not real_url:
+        if not real_url or _is_junk_url(real_url):
             continue
 
         item = {
@@ -550,7 +560,7 @@ def api_car_play(token):
             c_lines = KC.build_local_line_options(m_title, episode_index=ep_num)
             for cl in c_lines:
                 u = cl.get("url") or ""
-                if not u:
+                if not u or _is_junk_url(u):
                     continue
                 # 自动规整网页跳转层，直接获取真实 m3u8 直链
                 if ("/play/" in u or "/share/" in u) and not (".m3u8" in u or ".mp4" in u):

@@ -476,7 +476,7 @@
       padding: 24px 32px 36px;
       transform: translateY(100%);
       transition: transform 0.25s cubic-bezier(0.16, 1, 0.3, 1);
-      z-index: 50;
+      z-index: 100;
       max-height: 70vh;
       display: flex;
       flex-direction: column;
@@ -721,97 +721,15 @@
 
   <!-- 2. 核心独立车机播放器 (Tesla-Netflix Bypass 架构) -->
   <section id="player-view">
-    <!-- 播放器视频容器 -->
-    <div class="canvas-container" id="touch-surface">
-      <!-- 特斯拉/车机独立播放器框架 (采用 tesla-netflix 隔离 iframe + visibilitychange 拦截 + WebAudio 桥接) -->
-      <iframe id="car-player-frame" class="car-player-frame" src="about:blank" allow="autoplay; fullscreen" allowfullscreen style="width: 100%; height: 100%; border: none; position: absolute; top: 0; left: 0; z-index: 10; background: #000;"></iframe>
-      <!-- 兼容性保留节点 -->
-      <canvas id="car-canvas" style="display: none;"></canvas>
-      <video id="car-video" playsinline webkit-playsinline style="display: none;"></video>
-      <audio id="car-audio" preload="auto" style="display: none;"></audio>
-    </div>
+    <!-- 独立全屏播放框架 (Tesla-Netflix Bypass 原生沙箱隔离 + 硬件直解) -->
+    <iframe id="car-player-frame" class="car-player-frame" src="about:blank" allow="autoplay; fullscreen" allowfullscreen style="width: 100%; height: 100%; border: none; position: absolute; inset: 0; z-index: 10; background: #000;"></iframe>
 
-    <!-- 浮动快速换源/选集快捷键 -->
-    <div class="player-floating-tools" style="position: absolute; right: 24px; top: 72px; z-index: 30; display: flex; flex-direction: column; gap: 10px;">
-      <button class="btn-car gold" onclick="openDrawer('drawer-lines')" style="padding: 8px 14px; font-size: 13px; box-shadow: 0 4px 16px rgba(0,0,0,0.6);" title="切换极速/备用线路">⚡ 换线路</button>
-      <button class="btn-car" onclick="openDrawer('drawer-eps')" style="padding: 8px 14px; font-size: 13px; box-shadow: 0 4px 16px rgba(0,0,0,0.6);" title="选择剧集">📑 选集</button>
-    </div>
-
-    <!-- 手势实时调节 HUD -->
-    <div class="gesture-hud-center" id="gesture-hud">
-      <div class="gesture-icon" id="gesture-icon">🔊</div>
-      <div class="gesture-val" id="gesture-val">音量 100%</div>
+    <!-- 全局手势/状态 Toast 提示 HUD -->
+    <div class="gesture-hud-center" id="gesture-hud" style="z-index: 80; pointer-events: none;">
+      <div class="gesture-icon" id="gesture-icon">⚡</div>
+      <div class="gesture-val" id="gesture-val">极速源载入中...</div>
       <div class="gesture-bar-track">
         <div class="gesture-bar-fill" id="gesture-bar"></div>
-      </div>
-    </div>
-
-    <!-- 交互 HUD 层 (自动淡出) -->
-    <div class="player-overlay" id="player-overlay">
-      <!-- 顶部信息栏 -->
-      <div class="hud-top-bar">
-        <div class="hud-title-group">
-          <button class="btn-car" onclick="closePlayer()" style="padding: 4px 8px; font-size: 12px;">← 退出影院</button>
-          <div class="hud-movie-title" id="disp-movie-title">载入中...</div>
-          <div class="hud-ep-title" id="disp-ep-title">正片</div>
-        </div>
-
-        <div style="display: flex; align-items: center; gap: 8px;">
-          <!-- 技术监控监视器 -->
-          <div class="hud-tech-monitor">
-            <span>解码: <strong id="stat-decoder">方案A: 芯片硬解 ➔ Canvas (零黑屏)</strong></span>
-            <span>帧率: <strong id="stat-fps">60.0 FPS</strong></span>
-            <span id="stat-renderer" style="display:none">WebGL 2.0</span>
-            <span id="stat-audio" style="display:none">WebAudio</span>
-            <span id="stat-colormode" style="display:none">原色直出</span>
-          </div>
-          <!-- 声音解锁提示按钮 (当浏览器拦截自动播放时显示) -->
-          <button class="btn-car" id="btn-audio-unlock" onclick="unlockAudio()" style="display: none; background: #eab308; color: #000; font-weight: bold; padding: 6px 12px; font-size: 13px;" title="点击开启声音">🔊 开启声音</button>
-          <!-- 顶栏专属全屏快捷按钮：分屏模式下永不被挤压，一触即大！ -->
-          <button class="btn-car primary btn-fullscreen" id="btn-top-fullscreen" onclick="toggleFullscreen()" style="padding: 6px 14px; font-size: 13px;" title="进入/退出全屏">⛶ 全屏</button>
-        </div>
-      </div>
-
-      <!-- 底部控制栏 -->
-      <div class="hud-bottom-bar">
-        <!-- 频谱动画 -->
-        <canvas id="spectrum-canvas"></canvas>
-
-        <!-- 进度条与时间 -->
-        <div class="progress-wrap">
-          <span class="time-badge" id="disp-cur-time">00:00</span>
-          <div class="progress-bar" id="progress-bar" onclick="seekByClick(event)">
-            <div class="progress-fill" id="progress-fill"></div>
-          </div>
-          <span class="time-badge" id="disp-dur-time">00:00</span>
-        </div>
-
-        <!-- 紧凑控制行 (自适应半屏排布) -->
-        <div class="controls-row">
-          <div class="controls-left">
-            <button class="btn-car" onclick="prevEpisode()">⏮ 上集</button>
-            <button class="btn-car" onclick="seekRelative(-15)">⏪ 15s</button>
-            <button class="btn-car primary" id="btn-play-toggle" onclick="togglePlayPause()">⏸ 暂停</button>
-            <button class="btn-car" onclick="seekRelative(15)">⏩ 15s</button>
-            <button class="btn-car" onclick="nextEpisode()">⏭ 下集</button>
-          </div>
-
-          <div class="controls-right">
-            <!-- 线路选择 -->
-            <button class="btn-car gold" id="btn-line-selector" onclick="openDrawer('drawer-lines')" title="切换极速/备用线路">⚡ <span id="btn-line-name">极速源</span></button>
-            <!-- 选集 -->
-            <button class="btn-car" onclick="openDrawer('drawer-eps')">📑 选集</button>
-            <!-- 车载调音/画质 (二级抽屉，半屏自动隐藏以保全屏按钮) -->
-            <button class="btn-car btn-opt" onclick="openDrawer('drawer-audio')" title="车载音效">🔊 音效</button>
-            <button class="btn-car btn-opt" onclick="openDrawer('drawer-color')" title="色彩增强与杜比">🎨 画质</button>
-            <!-- GPU 原生画质切换 (1080P / 720P / 4K / 自动) -->
-            <button class="btn-car btn-opt" id="btn-quality" onclick="toggleQuality()" title="画质模式切换">📺 1080P</button>
-            <!-- 倍速 -->
-            <button class="btn-car" id="btn-speed" onclick="cycleSpeed()">1.0x</button>
-            <!-- 核心：全屏按钮 (醒目青色，防挤压 flex-shrink: 0，车机半屏永远可见) -->
-            <button class="btn-car primary btn-fullscreen" onclick="toggleFullscreen()" title="进入/退出全屏">⛶ 全屏</button>
-          </div>
-        </div>
       </div>
     </div>
 
@@ -1827,98 +1745,109 @@
     let gestureAction = null; // 'vol', 'bright', 'seek'
     let gestureHudTimer = null;
 
-    touchSurface.addEventListener('touchstart', (e) => {
-      if (audioCtx && audioCtx.state === 'suspended') {
-        audioCtx.resume().catch(() => {});
-      }
-      if (audio && audio.paused && hasRenderedAnyVideoFrame) {
-        audio.play().then(() => {
-          const btn = document.getElementById('btn-audio-unlock');
-          if (btn) btn.style.display = 'none';
-        }).catch(() => {});
-      }
-      if (e.touches.length !== 1) return;
-      isTouching = true;
-      touchStartX = e.touches[0].clientX;
-      touchStartY = e.touches[0].clientY;
-      gestureAction = null;
-    }, { passive: true });
-
-    touchSurface.addEventListener('touchmove', (e) => {
-      if (!isTouching || e.touches.length !== 1) return;
-      const curX = e.touches[0].clientX;
-      const curY = e.touches[0].clientY;
-      const dx = curX - touchStartX;
-      const dy = curY - touchStartY;
-
-      if (!gestureAction) {
-        if (Math.abs(dy) > 20) {
-          gestureAction = (touchStartX < window.innerWidth / 2) ? 'bright' : 'vol';
-        } else if (Math.abs(dx) > 30) {
-          gestureAction = 'seek';
+    if (touchSurface) {
+      touchSurface.addEventListener('touchstart', (e) => {
+        if (audioCtx && audioCtx.state === 'suspended') {
+          audioCtx.resume().catch(() => {});
         }
-      }
+        if (audio && audio.paused && hasRenderedAnyVideoFrame) {
+          audio.play().then(() => {
+            const btn = document.getElementById('btn-audio-unlock');
+            if (btn) btn.style.display = 'none';
+          }).catch(() => {});
+        }
+        if (e.touches.length !== 1) return;
+        isTouching = true;
+        touchStartX = e.touches[0].clientX;
+        touchStartY = e.touches[0].clientY;
+        gestureAction = null;
+      }, { passive: true });
 
-      if (gestureAction === 'vol') {
-        const delta = -dy / 300;
-        let v = (masterGain ? masterGain.gain.value : 1.0) + delta;
-        v = Math.max(0.0, Math.min(2.0, v));
-        setMasterVolume(v);
-        touchStartY = curY;
-      } else if (gestureAction === 'bright') {
-        const delta = -dy / 400;
-        userBrightness = Math.max(0.3, Math.min(1.8, userBrightness + delta));
-        const pct = Math.round(userBrightness * 100);
-        showGestureHud('☀️', `亮度 ${pct}%`, (userBrightness - 0.3) / 1.5);
-        touchStartY = curY;
-      } else if (gestureAction === 'seek') {
-        const seekDelta = Math.round(dx / 5);
-        showGestureHud('⏩', `${seekDelta > 0 ? '+' : ''}${seekDelta}s`, 0.5);
-      }
-    }, { passive: true });
+      touchSurface.addEventListener('touchmove', (e) => {
+        if (!isTouching || e.touches.length !== 1) return;
+        const curX = e.touches[0].clientX;
+        const curY = e.touches[0].clientY;
+        const dx = curX - touchStartX;
+        const dy = curY - touchStartY;
 
-    touchSurface.addEventListener('touchend', (e) => {
-      if (gestureAction === 'seek') {
-        const dx = e.changedTouches[0].clientX - touchStartX;
-        const seekDelta = Math.round(dx / 5);
-        seekRelative(seekDelta);
-      } else if (!gestureAction) {
-        // 单击触发 HUD 显示/隐藏
-        toggleOverlay();
-      }
-      isTouching = false;
-      gestureAction = null;
-    });
+        if (!gestureAction) {
+          if (Math.abs(dy) > 20) {
+            gestureAction = (touchStartX < window.innerWidth / 2) ? 'bright' : 'vol';
+          } else if (Math.abs(dx) > 30) {
+            gestureAction = 'seek';
+          }
+        }
 
-    // 双击播放 / 暂停
-    let lastTap = 0;
-    touchSurface.addEventListener('click', (e) => {
-      unlockAudio();
-      const now = Date.now();
-      if (now - lastTap < 300) {
-        togglePlayPause();
-      } else {
-        toggleOverlay();
-      }
-      lastTap = now;
-    });
+        if (gestureAction === 'vol') {
+          const delta = -dy / 300;
+          let v = (masterGain ? masterGain.gain.value : 1.0) + delta;
+          v = Math.max(0.0, Math.min(2.0, v));
+          setMasterVolume(v);
+          touchStartY = curY;
+        } else if (gestureAction === 'bright') {
+          const delta = -dy / 400;
+          userBrightness = Math.max(0.3, Math.min(1.8, userBrightness + delta));
+          const pct = Math.round(userBrightness * 100);
+          showGestureHud('☀️', `亮度 ${pct}%`, (userBrightness - 0.3) / 1.5);
+          touchStartY = curY;
+        } else if (gestureAction === 'seek') {
+          const seekDelta = Math.round(dx / 5);
+          showGestureHud('⏩', `${seekDelta > 0 ? '+' : ''}${seekDelta}s`, 0.5);
+        }
+      }, { passive: true });
+
+      touchSurface.addEventListener('touchend', (e) => {
+        if (gestureAction === 'seek') {
+          const dx = e.changedTouches[0].clientX - touchStartX;
+          const seekDelta = Math.round(dx / 5);
+          seekRelative(seekDelta);
+        } else if (!gestureAction) {
+          toggleOverlay();
+        }
+        isTouching = false;
+        gestureAction = null;
+      });
+
+      let lastTap = 0;
+      touchSurface.addEventListener('click', (e) => {
+        unlockAudio();
+        const now = Date.now();
+        if (now - lastTap < 300) {
+          togglePlayPause();
+        } else {
+          toggleOverlay();
+        }
+        lastTap = now;
+      });
+    }
 
     function showGestureHud(icon, text, ratio) {
       const hud = document.getElementById('gesture-hud');
-      document.getElementById('gesture-icon').innerText = icon;
-      document.getElementById('gesture-val').innerText = text;
-      document.getElementById('gesture-bar').style.width = Math.round(ratio * 100) + '%';
+      if (!hud) return;
+      const iEl = document.getElementById('gesture-icon');
+      if (iEl) iEl.innerText = icon;
+      const vEl = document.getElementById('gesture-val');
+      if (vEl) vEl.innerText = text;
+      const bEl = document.getElementById('gesture-bar');
+      if (bEl) bEl.style.width = Math.round((ratio || 0) * 100) + '%';
       hud.classList.add('visible');
 
       clearTimeout(gestureHudTimer);
       gestureHudTimer = setTimeout(() => {
         hud.classList.remove('visible');
-      }, 1200);
+      }, 1500);
     }
 
     function toggleOverlay() {
       const el = document.getElementById('player-overlay');
+      if (!el) return;
       if (el.classList.contains('hidden')) {
+        el.classList.remove('hidden');
+        resetOverlayTimer();
+      } else {
+        el.classList.add('hidden');
+      }
+    }
         el.classList.remove('hidden');
         resetOverlayTimer();
       } else {
@@ -2119,6 +2048,18 @@
       const iframe = document.getElementById('car-player-frame');
       if (iframe) {
         const frameSrc = `/car/player_frame?url=${encodeURIComponent(cleanUrl)}&title=${encodeURIComponent(movieTitle)}&ep=${encodeURIComponent(epTitle)}`;
+        if (iframe.contentWindow && iframe.getAttribute('data-loaded') === 'true') {
+          try {
+            iframe.contentWindow.postMessage({
+              type: 'LOAD_URL',
+              url: cleanUrl,
+              title: movieTitle,
+              epTitle: epTitle
+            }, '*');
+            return;
+          } catch (_) {}
+        }
+        iframe.setAttribute('data-loaded', 'true');
         iframe.src = frameSrc;
       }
     }
@@ -2137,9 +2078,12 @@
         case 'CLOSE':
           closePlayer();
           break;
+        case 'OPEN_DRAWER':
+          openDrawer(data.drawer);
+          break;
         case 'LINE_ERROR':
-          console.warn('[Host] 播放器上报线路异常，自动切换下一条极速源...');
-          autoSwitchToNextFastLine('线路异常，自动重连');
+          console.warn('[Host] 播放器上报线路异常，自动切换下一条极速源:', data.reason);
+          autoSwitchToNextFastLine(data.reason || '线路异常，自动重连');
           break;
       }
     });
@@ -2219,7 +2163,7 @@
 
     function autoSwitchToNextFastLine(reason = '卡顿/超时') {
       if (isAutoSwitching) {
-        console.warn('[CarPlay] autoSwitchToNextFastLine 防抖节流中');
+        console.warn('[CarPlay] autoSwitchToNextFastLine 节流中');
         return;
       }
       if (!currentLines || currentLines.length <= 1) {
@@ -2229,7 +2173,7 @@
       lineSwitchRetries++;
       if (lineSwitchRetries > currentLines.length) {
         console.warn('[Car] All lines attempted and failed');
-        showGestureHud('⚠️', '所有软解线路均已尝试，请点击换源重试', 3.0);
+        showGestureHud('⚠️', '所有线路均已尝试，请点击换源重试', 3.0);
         return;
       }
 
@@ -2262,7 +2206,7 @@
       try {
         selectLine(nextIdx);
       } finally {
-        setTimeout(() => { isAutoSwitching = false; }, 1200);
+        setTimeout(() => { isAutoSwitching = false; }, 800);
       }
     }
 
@@ -2433,26 +2377,6 @@
       document.body.style.overflow = 'hidden';
 
       try {
-        initCanvasRenderer();
-      } catch (e) {
-        console.warn('initCanvasRenderer failed in play:', e);
-      }
-      try {
-        initWebAudio();
-        if (audioCtx && audioCtx.state === 'suspended') {
-          audioCtx.resume().catch(() => {});
-        }
-      } catch (e) {
-        console.warn('initWebAudio failed in play:', e);
-      }
-      try {
-        initWakeLock();
-      } catch (_) {}
-      try {
-        renderFrameLoop();
-      } catch (_) {}
-
-      try {
         const res = await fetch('/api/detail/' + encodeURIComponent(cid));
         const d = await res.json();
         if (!d.ok) {
@@ -2515,6 +2439,13 @@
       if ((u.includes('/play/') || u.includes('/share/')) && !u.includes('.m3u8') && !u.includes('.mp4')) {
         u = u.replace(/\/+$/, '') + '/index.m3u8';
       }
+      const low = u.toLowerCase();
+      if (low.includes('byteimg.com') || low.includes('image.image') || low.includes('tplv-') ||
+          low.includes('youku.com/v_show') || low.includes('.jpg') || low.includes('.jpeg') ||
+          low.includes('.png') || low.includes('.webp') || low.includes('.html')) {
+        return { ...line, latency: 99999, available: false, effectiveUrl: u };
+      }
+
       let probeUrl = u;
       if (probeUrl.startsWith('http') && !probeUrl.includes(location.host) && !probeUrl.includes('127.0.0.1') && !probeUrl.includes('/proxy?')) {
         probeUrl = '/proxy?u=' + encodeURIComponent(probeUrl);
@@ -2528,6 +2459,10 @@
           signal: ctrl.signal
         });
         clearTimeout(tid);
+        const ct = (resp.headers.get('content-type') || '').toLowerCase();
+        if (ct.startsWith('image/') || ct.includes('text/html')) {
+          return { ...line, latency: 99999, available: false, effectiveUrl: u };
+        }
         if (resp.ok || resp.status === 206 || resp.status === 200) {
           const latency = Math.max(12, Math.round(performance.now() - t0));
           return { ...line, latency, available: true, effectiveUrl: u };
@@ -2580,7 +2515,7 @@
       if (!currentLines || currentLines.length === 0) return;
       showGestureHud('⚡', '正在并发测速...', 1.0);
       const linesBody = document.getElementById('drawer-lines-body');
-      linesBody.innerHTML = '<div style="color: var(--accent-cyan); font-size: 15px; padding: 10px;">正在并发测速优选极速源...</div>';
+      if (linesBody) linesBody.innerHTML = '<div style="color: var(--accent-cyan); font-size: 15px; padding: 10px;">正在并发测速优选极速源...</div>';
 
       const candidateCount = Math.min(8, currentLines.length);
       const tested = await Promise.all(currentLines.slice(0, candidateCount).map(testLineLatency));
@@ -2598,29 +2533,40 @@
     }
 
     async function loadPlayLines(token, title = '', epNum = 1) {
-      document.getElementById('btn-line-name').innerText = '测速选源中...';
+      const nameEl = document.getElementById('btn-line-name');
+      if (nameEl) nameEl.innerText = '测速选源中...';
       const linesBody = document.getElementById('drawer-lines-body');
-      linesBody.innerHTML = '<div style="color: var(--accent-cyan); font-size: 15px; padding: 10px;">正在并发测速优选极速源...</div>';
+      if (linesBody) linesBody.innerHTML = '<div style="color: var(--accent-cyan); font-size: 15px; padding: 10px;">正在并发测速优选极速源...</div>';
 
       try {
         const query = '?title=' + encodeURIComponent(title) + '&ep=' + encodeURIComponent(epNum);
         const res = await fetch('/api/car/play/' + encodeURIComponent(token) + query);
         const d = await res.json();
         if (!d.ok || !d.lines || d.lines.length === 0) {
-          linesBody.innerHTML = '<div style="color: var(--accent-red); padding: 10px;">当前暂无可播线路，请稍后重试</div>';
+          if (linesBody) linesBody.innerHTML = '<div style="color: var(--accent-red); padding: 10px;">当前暂无可播线路，请稍后重试</div>';
           return;
         }
 
-        const rawLines = d.lines;
-        showGestureHud('⚡', `正在并发优选 ${rawLines.length} 条线路...`, 0.8);
+        const badKeywords = ['byteimg.com', '.image', 'tplv-', '.jpg', '.jpeg', '.png', '.webp', '.html', 'youku.com/v_show'];
+        const validLines = d.lines.filter(l => {
+          const lu = (l.url || '').toLowerCase();
+          return !badKeywords.some(k => lu.includes(k));
+        });
 
-        // 并发对候选线路进行快速网络测速与健康检测（单线超时 1000ms）
-        const candidateCount = Math.min(6, rawLines.length);
-        const testedCandidates = await Promise.all(rawLines.slice(0, candidateCount).map(testLineLatency));
-        const remaining = rawLines.slice(candidateCount).map(l => ({ ...l, latency: 99999, available: true }));
+        if (validLines.length === 0) {
+          if (linesBody) linesBody.innerHTML = '<div style="color: var(--accent-red); padding: 10px;">暂无可播放视频源</div>';
+          return;
+        }
+
+        showGestureHud('⚡', `正在并发优选 ${validLines.length} 条线路...`, 0.8);
+
+        // 并发对候选线路进行快速网络测速与健康检测（单线超时 2000ms）
+        const candidateCount = Math.min(8, validLines.length);
+        const testedCandidates = await Promise.all(validLines.slice(0, candidateCount).map(testLineLatency));
+        const remaining = validLines.slice(candidateCount).map(l => ({ ...l, latency: 99999, available: true }));
         const allTested = testedCandidates.concat(remaining);
 
-        // 测速智能排序：按响应延迟从小到大排序，不可用(404/403)排到最后
+        // 测速智能排序：按响应延迟从小到大排序，不可用(404/403/超时)排到最后
         allTested.sort((a, b) => {
           const latA = (a.available !== false && a.latency) ? a.latency : 99999;
           const latB = (b.available !== false && b.latency) ? b.latency : 99999;
@@ -2639,7 +2585,7 @@
         applyLinePlay(fastest);
       } catch (e) {
         console.error('[CarPlay] Line resolution/test error:', e);
-        linesBody.innerHTML = '<div style="color: var(--accent-red); padding: 10px;">车机线路解析网络异常</div>';
+        if (linesBody) linesBody.innerHTML = '<div style="color: var(--accent-red); padding: 10px;">车机线路解析网络异常</div>';
       }
     }
 
@@ -2685,6 +2631,7 @@
     function closePlayer() {
       const iframe = document.getElementById('car-player-frame');
       if (iframe) {
+        iframe.removeAttribute('data-loaded');
         iframe.src = 'about:blank';
       }
       if (videoAbortCtrl) { videoAbortCtrl.abort(); videoAbortCtrl = null; }
@@ -2709,6 +2656,11 @@
       if (carHeader) carHeader.style.display = 'flex';
       document.getElementById('home-view').style.display = 'block';
       document.body.style.overflow = '';
+      closeDrawer('drawer-lines');
+      closeDrawer('drawer-eps');
+      closeDrawer('drawer-audio');
+      closeDrawer('drawer-color');
+      closeDrawer('drawer-engine');
     }
 
     // ========================================================
