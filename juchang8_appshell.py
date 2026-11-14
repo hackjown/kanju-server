@@ -21,7 +21,7 @@ SERVERS = [
     {"key": "kanju", "name": "看剧AI 官方", "desc": "kanju.ai 官方服务器", "url": "https://kanju.ai/"},
 ]
 
-CONFIG_VERSION = os.environ.get("APPSHELL_CONFIG_VERSION", "2026111501")
+CONFIG_VERSION = os.environ.get("APPSHELL_CONFIG_VERSION", "2026111502")
 
 
 def _base():
@@ -37,14 +37,7 @@ def _config():
         "type": "web",
         "apiUrl": base + "/app-select",
         "enable": True,
-        "config": {"region": "CN"},
         "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-        "fallbackPage": {
-            "title": "暂时无法连接服务器",
-            "message": "请检查网络，或稍后重新打开 App。",
-            "links": [{"title": "我的服务器", "url": base + "/"},
-                      {"title": "看剧AI 官方", "url": "https://kanju.ai/"}],
-        },
         "version": CONFIG_VERSION,
     }
 
