@@ -11,6 +11,7 @@
 import json
 import os
 import time
+from collections import deque
 
 from flask import Response, jsonify, request
 
@@ -137,6 +138,20 @@ if (saved && saved.url) {
 </script></body></html>"""
 
 
+_HITS = deque(maxlen=60)
+
+
+def _hit(tag):
+    try:
+        item = {"t": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime()), "tag": tag,
+                "path": request.full_path.rstrip("?"), "ip": request.headers.get("X-Forwarded-For") or request.remote_addr,
+                "ua": (request.headers.get("User-Agent") or "")[:200]}
+        _HITS.append(item)
+        print("[appshell] hit", json.dumps(item, ensure_ascii=False), flush=True)
+    except Exception:
+        pass
+
+
 def register(app):
     def cfg_resp():
         resp = jsonify(_config())
@@ -146,16 +161,31 @@ def register(app):
 
     @app.route("/app-config.json")
     def appshell_config():
+        _hit("config")
         return cfg_resp()
 
     @app.route("/cfg/<path:name>")
     def appshell_config_any(name):
+        _hit("cfg")
         return cfg_resp()
 
     @app.route("/app-select")
     def appshell_select():
+        _hit("select")
         html = PAGE.replace("__SERVERS__", json.dumps(SERVERS, ensure_ascii=False))
         resp = Response(html, content_type="text/html; charset=utf-8")
+        resp.headers["Cache-Control"] = "no-store"
+        return resp
+
+    @app.before_request
+    def appshell_ua_probe():
+        ua = request.headers.get("User-Agent") or ""
+        if "H5Shell" in ua or "CFNetwork" in ua:
+            _hit("ua")
+
+    @app.route("/app-debug")
+    def appshell_debug():
+        resp = jsonify({"hits": list(_HITS)[::-1]})
         resp.headers["Cache-Control"] = "no-store"
         return resp
 
