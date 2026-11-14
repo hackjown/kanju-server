@@ -652,7 +652,7 @@
   <!-- 1. 首页片库浏览视图 -->
   <main id="home-view">
     <div class="home-hero-search">
-      <input type="text" id="car-search-input" class="search-input-car" placeholder="🔍 触屏输入片名（如：庆余年、周处除三害、疯狂动物城、给阿嬷的情书）"/>
+      <input type="text" id="car-search-input" class="search-input-car" placeholder="🔍 触屏输入片名（如：庆余年、周处除三害、疯狂动物城、给阿嬷的情书）" onkeydown="if(event.key==='Enter')runCarSearch()"/>
       <button class="btn-car primary" onclick="runCarSearch()">立即检索</button>
     </div>
 
@@ -732,6 +732,11 @@
         <div class="gesture-bar-fill" id="gesture-bar"></div>
       </div>
     </div>
+
+    <!-- 兼容性保留节点 (防止旧函数对 car-video/car-audio/car-canvas 产生 null 引用) -->
+    <canvas id="car-canvas" style="display: none;"></canvas>
+    <video id="car-video" playsinline webkit-playsinline style="display: none;"></video>
+    <audio id="car-audio" preload="auto" style="display: none;"></audio>
 
     <!-- 弹窗 1: 线路切换抽屉 -->
     <div class="car-drawer" id="drawer-lines">
@@ -1848,12 +1853,6 @@
         el.classList.add('hidden');
       }
     }
-        el.classList.remove('hidden');
-        resetOverlayTimer();
-      } else {
-        el.classList.add('hidden');
-      }
-    }
 
     function resetOverlayTimer() {
       clearTimeout(overlayTimer);
@@ -2948,48 +2947,52 @@
     }
 
     // 原生 GPU Video 核心事件监听
-    video.addEventListener('play', () => {
-      const btn = document.getElementById('btn-play-toggle');
-      if (btn) {
-        btn.innerText = '⏸ 暂停';
-        btn.classList.add('primary');
-      }
-    });
-    video.addEventListener('pause', () => {
-      const btn = document.getElementById('btn-play-toggle');
-      if (btn) {
-        btn.innerText = '▶ 播放';
-        btn.classList.remove('primary');
-      }
-    });
-    video.addEventListener('timeupdate', updateProgress);
-    video.addEventListener('ended', nextEpisode);
-    video.addEventListener('error', (e) => {
-      console.warn('[Video] Error:', e);
-      autoSwitchToNextFastLine('视频流加载异常');
-    });
+    if (video) {
+      video.addEventListener('play', () => {
+        const btn = document.getElementById('btn-play-toggle');
+        if (btn) {
+          btn.innerText = '⏸ 暂停';
+          btn.classList.add('primary');
+        }
+      });
+      video.addEventListener('pause', () => {
+        const btn = document.getElementById('btn-play-toggle');
+        if (btn) {
+          btn.innerText = '▶ 播放';
+          btn.classList.remove('primary');
+        }
+      });
+      video.addEventListener('timeupdate', updateProgress);
+      video.addEventListener('ended', nextEpisode);
+      video.addEventListener('error', (e) => {
+        console.warn('[Video] Error:', e);
+        autoSwitchToNextFastLine('视频流加载异常');
+      });
+    }
 
     // 备用音频节点事件监听
-    audio.addEventListener('play', () => {
-      const btn = document.getElementById('btn-play-toggle');
-      if (btn) {
-        btn.innerText = '⏸ 暂停';
-        btn.classList.add('primary');
-      }
-    });
-    audio.addEventListener('pause', () => {
-      const btn = document.getElementById('btn-play-toggle');
-      if (btn) {
-        btn.innerText = '▶ 播放';
-        btn.classList.remove('primary');
-      }
-    });
-    audio.addEventListener('timeupdate', updateProgress);
-    audio.addEventListener('ended', nextEpisode);
-    audio.addEventListener('error', (e) => {
-      console.warn('[Audio] Error:', e);
-      autoSwitchToNextFastLine('音频流加载异常');
-    });
+    if (audio) {
+      audio.addEventListener('play', () => {
+        const btn = document.getElementById('btn-play-toggle');
+        if (btn) {
+          btn.innerText = '⏸ 暂停';
+          btn.classList.add('primary');
+        }
+      });
+      audio.addEventListener('pause', () => {
+        const btn = document.getElementById('btn-play-toggle');
+        if (btn) {
+          btn.innerText = '▶ 播放';
+          btn.classList.remove('primary');
+        }
+      });
+      audio.addEventListener('timeupdate', updateProgress);
+      audio.addEventListener('ended', nextEpisode);
+      audio.addEventListener('error', (e) => {
+        console.warn('[Audio] Error:', e);
+        autoSwitchToNextFastLine('音频流加载异常');
+      });
+    }
 
     // 页面启动检查 URL 参数
     window.addEventListener('DOMContentLoaded', () => {
