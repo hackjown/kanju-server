@@ -3097,9 +3097,9 @@ def proxy_v1(subpath):
                                 "resolve_required": False,
                                 "resolved": True,
                                 "selected": False,
-                                "url": (f"/api/pan/stream/{pwd}.m3u8?pan_type={ptype}&passcode={s.get('passcode', '')}&title={urllib.parse.quote(m_title)}&format=m3u8"
+                                "url": (f"/api/pan/stream/{pwd}.m3u8?pan_type={ptype}&passcode={s.get('passcode', '')}&title={urllib.parse.quote(m_title)}&ep={ep_num}&format=m3u8"
                                         if ptype == "115"
-                                        else f"/api/pan/stream/{pwd}.mp4?pan_type={ptype}&passcode={s.get('passcode', '')}&title={urllib.parse.quote(m_title)}&format=mp4"),
+                                        else f"/api/pan/stream/{pwd}.mp4?pan_type={ptype}&passcode={s.get('passcode', '')}&title={urllib.parse.quote(m_title)}&ep={ep_num}&format=mp4"),
                                 "url_kind": "m3u8" if ptype == "115" else "mp4",
                                 "is_4k": True,
                                 "is_pan": True
@@ -3272,9 +3272,15 @@ def api_pan_stream_play(pwd_id):
 
     res = {}
     try:
+        KPAN.set_preferred_episode(request.args.get("ep"))
         res = KPAN.parse_pan_video_link(pwd_id, pan_type, passcode=passcode)
     except Exception as e:
         res = {"ok": False, "error": str(e)}
+    finally:
+        try:
+            KPAN.set_preferred_episode(None)
+        except Exception:
+            pass
 
     if res.get("ok"):
         target_url = res.get("stream_url")

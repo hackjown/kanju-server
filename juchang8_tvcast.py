@@ -546,6 +546,98 @@ def _remember_tokens(vid, title, eps):
         print("[tvcast] 登记片名失败:", repr(ex))
 
 
+
+_PAN_CACHE = {}
+_PAN_TTL = 1200        # 网盘直链缓存 20 分钟：避免同一集反复转存/取流，也避免电视再请求一次时重新解析
+
+
+def _pan_resolve(conn, lo, ep_num=None, movie=False):
+    """直接解析网盘线路，返回 (url, kind, info)；失败返回 (None, None, 原因)。
+    电视拿到的是 /proxy 代理地址（带网盘 Cookie / Referer），不会再触发二次转存。"""
+    raw = lo.get("url") or ""
+    pu = urllib.parse.urlparse(raw)
+    q = dict(urllib.parse.parse_qsl(pu.query))
+    ptype = (q.get("pan_type") or "").lower()
+    if ptype == "uc" or "uc" in str(lo.get("play_from", "")).lower():
+        return None, None, "UC 网盘还不支持取流"
+    pwd = urllib.parse.unquote(pu.path.rsplit("/", 1)[-1])
+    for ext in (".m3u8", ".mp4"):
+        if pwd.endswith(ext):
+            pwd = pwd[: -len(ext)]
+    if not pwd:
+        return None, None, "缺少分享码"
+    try:
+        import juchang8_pan as KPAN
+    except Exception as e:
+        return None, None, "网盘模块不可用: %r" % e
+    title = q.get("title") or ""
+    passcode = q.get("passcode") or ""
+    if pwd == "auto":
+        try:
+            shares = KPAN.search_pan_shares(title) if title else []
+        except Exception:
+            shares = []
+        if not shares:
+            return None, None, "全网没搜到这部片的网盘资源"
+        pwd = shares[0].get("pwd_id") or shares[0].get("share_url")
+        ptype = (shares[0].get("pan_type") or ptype or "quark").lower()
+        passcode = shares[0].get("passcode") or ""
+        if ptype == "uc":
+            return None, None, "UC 网盘还不支持取流"
+    ptype = ptype or "quark"
+    want = None if movie else ep_num
+    key = (ptype, pwd, want)
+    hit = _PAN_CACHE.get(key)
+    if hit and _now() - hit[0] < _PAN_TTL:
+        return hit[1]
+    KPAN.set_preferred_episode(want)
+    try:
+        res = KPAN.parse_pan_video_link(pwd, ptype, passcode=passcode)
+    except Exception as e:
+        res = {"ok": False, "error": repr(e)}
+    finally:
+        KPAN.set_preferred_episode(None)
+    if not res.get("ok"):
+        out = (None, None, res.get("error") or "解析失败")
+        _PAN_CACHE[key] = (_now() - _PAN_TTL + 120, out)   # 失败结果只记 2 分钟
+        return out
+    target = res.get("stream_url") or ((res.get("files") or [{}])[0].get("stream_url"))
+    if not target or not target.startswith("http"):
+        return None, None, "没拿到播放地址"
+    fname = res.get("title") or ""
+    if want and KPAN._episode_of(fname) not in (None, want):
+        return None, None, "网盘里没有第 %s 集" % want
+    ref = "https://115.com/" if ptype == "115" else "https://pan.quark.cn/"
+    kind = "m3u8" if (".m3u8" in target or res.get("url_kind") == "m3u8") else _sniff_kind(KPAN, target, ref, ptype)
+    url = "/proxy?u=" + urllib.parse.quote(target, safe="") + "&ref=" + urllib.parse.quote(ref, safe="")
+    if kind == "m3u8":
+        url += "&format=m3u8"
+    info = {"file": fname, "color": KPAN.color_profile(fname), "pan": ptype}
+    out = (url, kind, info)
+    _PAN_CACHE[key] = (_now(), out)
+    return out
+
+
+def _sniff_kind(KPAN, target, ref, ptype):
+    """夸克的播放地址常常是不带 .m3u8 后缀的 HLS，取前几个字节判断，避免电视把 m3u8 当 mp4 播放而失败"""
+    try:
+        import requests
+        mod = _app_globals()
+        h = {"User-Agent": getattr(mod, "UA", "Mozilla/5.0"), "Referer": ref, "Range": "bytes=0-15"}
+        ck = KPAN.get_active_pan_cookie(ptype)
+        if ck:
+            h["Cookie"] = ck
+        r = requests.get(target, headers=h, timeout=8, stream=True)
+        head = next(r.iter_content(16), b"")
+        ct = (r.headers.get("Content-Type") or "").lower()
+        r.close()
+        if b"#EXTM3U" in head or "mpegurl" in ct:
+            return "m3u8"
+    except Exception as e:
+        print("[tvcast] 网盘地址类型探测失败:", repr(e))
+    return "mp4"
+
+
 def build_entry(conn, req, with_episodes=True):
     vid = req.get("variant_id")
     if not vid:
@@ -583,11 +675,18 @@ def build_entry(conn, req, with_episodes=True):
         if _is_pan(lo):
             if str(lo.get("id", "")).endswith(":guide") and any(_is_pan(x) and x is not lo for x in lines):
                 continue
-            ok, final = API.probe(lo.get("url") or "")
-            if not ok:
-                print("[tvcast] 网盘线路不可用，换下一条:", lo.get("label"))
+            ep_num = (cur.get("episode_number") or (ep or {}).get("episode_number"))
+            movie = (cat.get("content_kind") == "movie") or total <= 1
+            url, kind, info = _pan_resolve(conn, lo, ep_num, movie)
+            if not url:
+                print("[tvcast] 网盘线路不可用，换下一条:", lo.get("label"), "-", info)
                 continue
-            url, kind = (final or lo.get("url")), _kind(lo.get("url_kind"), lo.get("url") or "")
+            if info.get("color") == "dv_only" and any(not _is_pan(x) and x.get("is_4k") for x in lines):
+                # 纯杜比视界 P5 在电视盒子上会绿紫偏色，有别的 4K 线路时先用别的
+                print("[tvcast] 网盘文件是纯杜比视界，电视会偏色，改用其他 4K 线路:", info.get("file"))
+                url, kind = None, None
+                continue
+            print("[tvcast] 网盘取流成功:", info.get("pan"), info.get("file"), info.get("color"), kind)
         else:
             if tried_other >= 4:
                 break
@@ -602,6 +701,12 @@ def build_entry(conn, req, with_episodes=True):
     tv_lines = []
     for lo in lines:
         t = _tv_line(conn, lo, sel_id)
+        if _is_pan(lo) and lo is not chosen:
+            ep_num = cur.get("episode_number") or (ep or {}).get("episode_number") or ""
+            movie = 1 if ((cat.get("content_kind") == "movie") or total <= 1) else 0
+            t["url"] = conn.base + "/v1/tv-cast/pan-play?" + urllib.parse.urlencode(
+                {"u": lo.get("url") or "", "ep": ep_num, "movie": movie, "id": lo.get("id") or ""})
+            t["url_kind"] = "m3u8"
         if lo is chosen:
             t.update({"url": _abs(conn, url), "url_kind": kind or t["url_kind"], "resolved": True,
                       "resolve_required": False})
@@ -1207,6 +1312,28 @@ def register(app, me_func=None):
     @sock.route("/v1/tv-cast/ws")
     def tv_cast_ws(ws):
         handle_ws(ws, base_url())
+
+    @app.route("/v1/tv-cast/pan-play")
+    def tv_cast_pan_play():
+        """电视在换源抽屉里直接点网盘线路时走这里：解析（带缓存）后输出代理过的播放列表"""
+        from flask import redirect, Response
+        lo = {"url": request.args.get("u") or "", "id": request.args.get("id") or "local:pan:x"}
+        try:
+            ep_num = int(request.args.get("ep") or 0) or None
+        except Exception:
+            ep_num = None
+
+        class _C:
+            base = base_url()
+        url, kind, info = _pan_resolve(_C, lo, ep_num, request.args.get("movie") == "1")
+        if not url:
+            return Response("pan unavailable: %s" % info, status=502, mimetype="text/plain")
+        if kind == "m3u8":
+            mod = _app_globals()
+            q = dict(urllib.parse.parse_qsl(urllib.parse.urlparse(url).query))
+            if mod is not None and hasattr(mod, "proxy_m3u8_directly"):
+                return mod.proxy_m3u8_directly(q.get("u"), q.get("ref") or "")
+        return redirect(url, code=302)
 
     @app.route("/v1/tv-cast/pairings/confirm", methods=["POST"])
     def tv_cast_confirm():

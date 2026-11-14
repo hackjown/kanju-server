@@ -826,25 +826,75 @@ def rank_pan_share(s):
     return score
 
 
+import threading as _th
+_PICK = _th.local()
+
+
+def set_preferred_episode(n):
+    """TV / 播放端在解析前设置想看的集数，rank_video_file 会优先挑这一集（同一线程内有效）"""
+    try:
+        _PICK.ep = int(n) if n else None
+    except Exception:
+        _PICK.ep = None
+
+
+def _episode_of(name):
+    name = name.lower()
+    for pat in (r"s\d{1,2}[ ._-]?e(\d{1,3})", r"(?<![a-z0-9])ep?[ ._-]?(\d{1,3})(?![0-9p])", r"第\s*(\d{1,3})\s*[集话話期]",
+                r"(?<![0-9])(\d{1,3})(?=\.(?:mp4|mkv|ts|mov|m4v|flv|avi|webm)$)"):
+        m = re.search(pat, name)
+        if m:
+            try:
+                return int(m.group(1))
+            except Exception:
+                pass
+    return None
+
+
+def color_profile(name):
+    """按文件名判断色彩格式：sdr / hdr10 / dv_hdr（P7/P8，可回落 HDR10）/ dv_only（P5，非杜比设备必定绿紫偏色）/ unknown"""
+    n = (name or "").lower()
+    toks = set(re.split(r"[^a-z0-9+]+", n))
+    has_dv = bool(toks & {"dv", "dovi", "dolbyvision"}) or "dolby.vision" in n or "dolby vision" in n or "杜比视界" in n
+    has_hdr = bool(toks & {"hdr", "hdr10", "hdr10+", "hdr10plus", "hlg"}) or "hdr10" in n
+    if "sdr" in toks or "maxplus" in n:
+        return "sdr"
+    if has_dv and has_hdr:
+        return "dv_hdr"
+    if has_dv:
+        return "dv_only"
+    if has_hdr:
+        return "hdr10"
+    return "unknown"
+
+
 def rank_video_file(f):
-    """网盘内视频文件排序打分器：智能优选 4K 且网页端绝对不偏色的版本"""
+    """网盘内视频文件排序打分器：先挑对集数，再挑 4K 且色彩不会出错的版本"""
     name = (f.get("n") or f.get("file_name") or "").lower()
     score = 0
+    want = getattr(_PICK, "ep", None)
+    if want:
+        ep = _episode_of(name)
+        if ep == want:
+            score += 1000
+        elif ep is not None:
+            score -= 1000
     if "2160p" in name or "4k" in name: score += 100
     elif "1080p" in name: score += 40
 
-    if "sdr" in name or "maxplus" in name: score += 80
-    elif "hdr10" in name or ("dv" in name and "hdr" in name): score += 50
-    elif "hdr" in name: score += 30
-
-    # 纯杜比视界 Profile 5，网页解码必定严重绿紫偏色，大幅降低优先级
-    if ("dv" in name or "dovi" in name or "杜比" in name) and ("sdr" not in name and "hdr" not in name):
-        score -= 150
+    cp = color_profile(name)
+    if cp == "sdr": score += 80
+    elif cp == "hdr10": score += 50
+    elif cp == "dv_hdr": score += 45
+    elif cp == "dv_only": score -= 150   # 纯杜比视界 Profile 5：网页和普通电视盒子都会绿紫偏色
 
     if "60fps" in name or "60帧" in name: score += 15
     if ".mp4" in name: score += 10
     size = f.get("s") or f.get("file_size") or 0
-    score += min(size / (1024 * 1024 * 1024), 10)
+    try:
+        score += min(float(size) / (1024 * 1024 * 1024), 10)
+    except Exception:
+        pass
     return score
 
 
