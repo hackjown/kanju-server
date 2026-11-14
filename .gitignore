@@ -1,4 +1,5 @@
 # 虚拟环境与本地缓存
+node_modules/
 .venv/
 __pycache__/
 *.pyc

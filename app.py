@@ -1745,9 +1745,10 @@ def api_home_rails():
 @app.route("/wasm/<path:filename>")
 def serve_wasm(filename):
     wasm_dir = os.path.join(HERE, "static", "wasm")
-    file_path = os.path.join(wasm_dir, filename)
+    base_name = os.path.basename(filename)
+    file_path = os.path.join(wasm_dir, base_name)
     if os.path.exists(file_path):
-        resp = send_from_directory(wasm_dir, filename)
+        resp = send_from_directory(wasm_dir, base_name)
         resp.headers["Content-Type"] = "application/wasm"
         resp.headers["Access-Control-Allow-Origin"] = "*"
         return resp

@@ -303,16 +303,20 @@
     // ─────────────────────────────────────────────────────────────
     // 普通模式: WebCodecs 硬解 -> Canvas + AudioWorklet (完全无 video/audio 标签，通常不报“行车仅限音频”)
     // 声音兼容(推荐): WebCodecs 硬解 -> Canvas + MSE Audio (日常首选，行车绝不黑屏)
+    // 极速软解: Wasm SIMD 软解 -> Canvas + Audio (非安全域 HTTP 或无 WebCodecs 时的 100% 兜底引擎)
+    const hasWebCodecs = typeof window !== 'undefined' && typeof window.VideoDecoder !== 'undefined';
+    const defaultPresetId = hasWebCodecs ? 'hardware-mse' : 'software-simd-no-mse';
+
     const decodePresets = [
       {
         id: 'hardware-mse',
-        label: '声音兼容（推荐）',
-        description: '日常首选，零黑屏硬解，声音高保真。',
-        enableSimd: false,
-        enableHardware: true,
-        enableWebCodecs: true,
-        enableAudioWebcodec: true,
-        enableVideoWebcodec: true,
+        label: hasWebCodecs ? '声音兼容（推荐）' : '极速软解（兼容）',
+        description: hasWebCodecs ? '日常首选，零黑屏硬解，声音高保真。' : '当前环境（HTTP/无WebCodecs）自动启用高性能 Wasm 软解 + Canvas。',
+        enableSimd: true,
+        enableHardware: hasWebCodecs,
+        enableWebCodecs: hasWebCodecs,
+        enableAudioWebcodec: hasWebCodecs,
+        enableVideoWebcodec: hasWebCodecs,
         enableAudioWorklet: true,
         audioMSE: true,
         enableWebGPU: false
@@ -321,20 +325,20 @@
         id: 'hardware-worklet',
         label: '普通模式（防提示）',
         description: '通常不显示“行车仅限音频”提示。',
-        enableSimd: false,
-        enableHardware: true,
-        enableWebCodecs: true,
-        enableAudioWebcodec: true,
-        enableVideoWebcodec: true,
+        enableSimd: true,
+        enableHardware: hasWebCodecs,
+        enableWebCodecs: hasWebCodecs,
+        enableAudioWebcodec: hasWebCodecs,
+        enableVideoWebcodec: hasWebCodecs,
         enableAudioWorklet: true,
         audioMSE: false,
         enableWebGPU: false
       },
       {
         id: 'software-simd-no-mse',
-        label: '旧版兼容',
-        description: '旧版车机或画面异常时尝试。',
-        enableSimd: false,
+        label: 'Wasm 极速软解',
+        description: 'Wasm SIMD 软解 + Canvas 逐帧渲染，完全免受车机和浏览器环境限制。',
+        enableSimd: true,
         enableHardware: false,
         enableWebCodecs: false,
         enableAudioWebcodec: false,
@@ -420,13 +424,14 @@
     async function initPlayer() {
       try {
         spinnerWrap.style.display = 'flex';
-        spinnerText.innerText = '正在启动车载芯片硬件解码器...';
+        spinnerText.innerText = hasWebCodecs ? '正在启动车载芯片硬件解码器...' : '正在启动 Wasm 极速图像引擎...';
 
         player = new TeslaPlayer({
           container: container,
           loop: false,
+          wasmBaseUrl: window.location.origin + '/wasm',
           decodePresetOptions: decodePresets,
-          decodePresetId: 'hardware-mse',
+          decodePresetId: defaultPresetId,
           showSeekButtons: true,
           showPlaybackRate: true,
           showSettings: true,
@@ -435,6 +440,7 @@
             window.toggleFullscreen();
           }
         });
+        window.playerInstance = player;
 
         // 订阅播放器底层事件
         player.on('time', (timeMs) => {
@@ -493,7 +499,7 @@
       const unlockOverlay = document.getElementById('autoplay-unlock-overlay');
       if (unlockOverlay) unlockOverlay.style.display = 'none';
       spinnerWrap.style.display = 'flex';
-      spinnerText.innerText = '正在载入 1080P 硬件直解流...';
+      spinnerText.innerText = hasWebCodecs ? '正在载入 1080P 硬件直解流...' : '正在载入 1080P 极速画质流...';
       startWatchdog();
 
       try {
