@@ -3029,8 +3029,9 @@ def proxy_v1(subpath):
                 m_title = r.get("title") or ""
                 if not m_title:
                     cur_disp = (r.get("current_episode") or {}).get("display_name") or ""
-                    if cur_disp and cur_disp not in ("正片", "抢先版", "预告"):
-                        m_title = cur_disp
+                    if cur_disp and cur_disp not in ("正片", "抢先版", "预告") and \
+                            not re.match(r"^\s*(第\s*\d+\s*[集话期]|EP?\s*\d+|\d+)\s*$", cur_disp, re.I):
+                        m_title = cur_disp   # “第1集”这种是集名不是片名，拿去搜网盘只会搜到无关分享
 
             # 关键保障：若上游接口 502/503 或未返回正常播放结构，启动本地应急播放合成机制，绝不报“当前线路暂时无法播放”！
             if st != 200 or not isinstance(r, dict) or "line_options" not in r:

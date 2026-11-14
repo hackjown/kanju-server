@@ -898,7 +898,125 @@ def rank_video_file(f):
     return score
 
 
+_QUARK_VIDEO_EXTS = (".mp4", ".mkv", ".ts", ".flv", ".mov", ".avi", ".m3u8", ".wmv", ".webm", ".m4v", ".rmvb")
+
+
+def _quark_dead_msg(msg):
+    msg = msg or ""
+    return any(k in msg for k in ("不存在", "失效", "取消", "违规", "过期", "删除", "封禁", "非法"))
+
+
+def _quark_is_video(f):
+    return (f.get("format_type") or "").lower().startswith("video") or \
+        any((f.get("file_name") or "").lower().endswith(ext) for ext in _QUARK_VIDEO_EXTS)
+
+
+def _quark_is_dir(f):
+    return bool(f.get("dir")) or f.get("file_type") == 0 and not _quark_is_video(f)
+
+
+def _quark_list_videos(pwd_id, stoken, headers, max_depth=3, max_dirs=12):
+    """列出分享里的视频文件，最多进三层子目录；返回 (首层列表, 视频列表, 错误)"""
+    top, videos, err = [], [], None
+    queue = [("0", 0)]
+    seen = 0
+    while queue and seen <= max_dirs:
+        fid, depth = queue.pop(0)
+        seen += 1
+        page = 1
+        while page <= 5:
+            url = ("https://drive-pc.quark.cn/1/clouddrive/share/sharepage/detail?pr=ucpro&fr=pc"
+                   f"&pwd_id={pwd_id}&stoken={urllib.parse.quote(stoken)}&pdir_fid={fid}"
+                   f"&force=0&_page={page}&_size=100&_sort=file_type:asc,file_name:asc")
+            try:
+                d = requests.get(url, headers=headers, timeout=8).json()
+            except Exception as e:
+                err = e
+                break
+            items = (d.get("data") or {}).get("list") or []
+            if fid == "0":
+                top.extend(items)
+            for f in items:
+                if _quark_is_video(f):
+                    videos.append(f)
+                elif _quark_is_dir(f) and depth < max_depth:
+                    queue.append((f.get("fid"), depth + 1))
+            total = ((d.get("metadata") or {}).get("_total")) or 0
+            if len(items) < 100 or page * 100 >= total:
+                break
+            page += 1
+    return top, videos, err
+
+
+def _quark_wait_task(task_id, headers, tries=10):
+    """夸克转存是异步任务，轮询拿到转存后的文件 fid"""
+    for i in range(tries):
+        try:
+            d = requests.get("https://drive-pc.quark.cn/1/clouddrive/task?pr=ucpro&fr=pc"
+                             f"&task_id={task_id}&retry_index={i}", headers=headers, timeout=8).json()
+            data = d.get("data") or {}
+            if data.get("status") == 2:
+                return (data.get("save_as") or {}).get("save_as_top_fids") or []
+            if d.get("code") not in (0, None):
+                print("[KanjuPan] 夸克转存任务失败:", d.get("message"))
+                return []
+        except Exception as e:
+            print("[KanjuPan] 查询夸克转存任务异常:", repr(e))
+        time.sleep(0.5)
+    return []
+
+
+_QUARK_ALIVE = {}
+
+
+def quark_share_alive(pwd_id, passcode="", cookie=""):
+    """快速检查夸克分享是否还有效（缓存 6 小时）；失效的会从索引里删掉"""
+    hit = _QUARK_ALIVE.get(pwd_id)
+    if hit and time.time() - hit[0] < 21600:
+        return hit[1]
+    headers = {"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+               "Referer": "https://pan.quark.cn/", "Content-Type": "application/json"}
+    if cookie:
+        headers["Cookie"] = cookie
+    alive = True
+    try:
+        t = requests.post("https://drive-pc.quark.cn/1/clouddrive/share/sharepage/token?pr=ucpro&fr=pc",
+                          json={"pwd_id": pwd_id, "passcode": passcode or ""}, headers=headers, timeout=5).json()
+        if t.get("code") != 0 or not (t.get("data") or {}).get("stoken"):
+            alive = not _quark_dead_msg(t.get("message")) and t.get("code") not in (41004, 41006, 41008, 41011, 41012)
+            if not alive:
+                print(f"[KanjuPan] 夸克分享已失效，移出索引: {pwd_id} ({t.get('message')})")
+                with _db() as conn:
+                    conn.execute("DELETE FROM pan_shares_index WHERE pwd_id=?", (pwd_id,))
+                    conn.commit()
+    except Exception:
+        return True          # 网络问题不算失效，也不缓存
+    _QUARK_ALIVE[pwd_id] = (time.time(), alive)
+    return alive
+
+
 def search_pan_shares(keyword, pan_type=None):
+    """搜索网盘资源，并把已失效的夸克分享提前筛掉（像 115 那样只给出能用的）"""
+    res = _search_pan_shares_raw(keyword, pan_type) or []
+    qk = [r for r in res if (r.get("pan_type") or "").lower() == "quark"]
+    if not qk:
+        return res
+    try:
+        cookie = get_active_pan_cookie("quark") or ""
+    except Exception:
+        cookie = ""
+    from concurrent.futures import ThreadPoolExecutor
+    check = qk[:8]
+    with ThreadPoolExecutor(max_workers=6) as ex:
+        alive = list(ex.map(lambda r: quark_share_alive(r.get("pwd_id") or "", r.get("passcode") or "", cookie), check))
+    dead = {id(r) for r, ok in zip(check, alive) if not ok}
+    out = [r for r in res if id(r) not in dead]
+    if dead:
+        print(f"[KanjuPan] {keyword}: 过滤掉 {len(dead)} 个失效夸克分享，剩 {len(out)} 个")
+    return out
+
+
+def _search_pan_shares_raw(keyword, pan_type=None):
     """搜索网盘资源：
     1. 若未限制类型或包含 115，且绑定了点115 (m.dian115.com) 账号，优先全自动调用点115官方检索优质 115 资源并入库；
     2. 在本地已缓存/导入的片单索引表中精准匹配，并按【4K原画+网页色彩兼容性(SDR>HDR10>纯DV)】智能重排序；
@@ -1063,7 +1181,7 @@ def auto_transfer_and_play_quark(pwd_id, cookie, passcode=""):
     if t_res.get("code") != 0 or not t_res.get("data", {}).get("stoken"):
         err_msg = t_res.get("message") or "分享链接已失效或提取码错误"
         # 链接失效时，从数据库索引中自动剔除，保持片库索引新鲜
-        if t_res.get("code") in (41006, 41011):
+        if t_res.get("code") in (41006, 41011, 41004, 41008, 41012) or _quark_dead_msg(err_msg):
             with _db() as conn:
                 conn.execute("DELETE FROM pan_shares_index WHERE pwd_id=?", (pwd_id,))
                 conn.commit()
@@ -1071,21 +1189,10 @@ def auto_transfer_and_play_quark(pwd_id, cookie, passcode=""):
 
     stoken = t_res["data"]["stoken"]
 
-    # 2. 查询分享文件详情
-    try:
-        detail_url = f"https://drive-pc.quark.cn/1/clouddrive/share/sharepage/detail?pwd_id={pwd_id}&stoken={urllib.parse.quote(stoken)}&pdir_fid=0&pr=ucpro&fr=pc"
-        r_det = requests.get(detail_url, headers=headers, timeout=8).json()
-    except Exception as e:
-        return {"ok": False, "error": f"请求夸克文件详情异常: {e}"}
-
-    file_list = r_det.get("data", {}).get("list") or []
-
-    # 识别是否包含有效视频文件
-    video_exts = (".mp4", ".mkv", ".ts", ".flv", ".mov", ".avi", ".m3u8", ".wmv", ".webm")
-    video_files = [
-        f for f in file_list
-        if (f.get("format_type") or "").lower().startswith("video") or any((f.get("file_name") or "").lower().endswith(ext) for ext in video_exts)
-    ]
+    # 2. 查询分享文件详情（自动进入子文件夹，很多夸克分享外面套了一层“片名”文件夹）
+    file_list, video_files, err = _quark_list_videos(pwd_id, stoken, headers)
+    if err and not file_list:
+        return {"ok": False, "error": f"请求夸克文件详情异常: {err}"}
 
     if not video_files:
         sample_name = file_list[0].get("file_name") if file_list else "空分享"
@@ -1112,7 +1219,9 @@ def auto_transfer_and_play_quark(pwd_id, cookie, passcode=""):
         "stoken": stoken,
         "to_pdir_fid": "0",
         "fid_list": [target_fid],
-        "fid_token_list": [share_fid_token] if share_fid_token else []
+        "fid_token_list": [share_fid_token] if share_fid_token else [],
+        "pdir_fid": str(target_file.get("pdir_fid") or "0"),
+        "scene": "link"
     }
     try:
         r_save = requests.post(save_url, headers=headers, json=save_payload, timeout=8).json()
@@ -1122,7 +1231,11 @@ def auto_transfer_and_play_quark(pwd_id, cookie, passcode=""):
     if r_save.get("code") != 0:
         return {"ok": False, "error": f"转存到夸克网盘失败: {r_save.get('message')}"}
 
-    saved_fids = r_save.get("data", {}).get("task_resp", {}).get("data", {}).get("save_as_top_fids") or [target_fid]
+    saved_fids = r_save.get("data", {}).get("task_resp", {}).get("data", {}).get("save_as_top_fids") or []
+    if not saved_fids and r_save.get("data", {}).get("task_id"):
+        saved_fids = _quark_wait_task(r_save["data"]["task_id"], headers)
+    if not saved_fids:
+        return {"ok": False, "error": "夸克转存任务没有返回文件（可能网盘空间不足或转存次数受限）"}
     saved_fid = saved_fids[0]
 
     # 4. 记录到转存表 (设定 24 小时后自动清理)
