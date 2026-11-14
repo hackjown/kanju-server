@@ -1737,6 +1737,15 @@ def api_home_rails():
                     "short": rail({"kind": "short_drama"}, "short")})
 
 
+@app.route("/car/player_frame")
+def car_player_frame():
+    resp = send_from_directory(os.path.join(HERE, "static"), "car_player_frame.html")
+    resp.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+    resp.headers["Pragma"] = "no-cache"
+    resp.headers["Expires"] = "0"
+    return resp
+
+
 @app.route("/car")
 @app.route("/car/player")
 @app.route("/car/player/<path:p>")

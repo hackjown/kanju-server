@@ -4,7 +4,7 @@
   <meta charset="utf-8"/>
   <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover"/>
   <meta name="referrer" content="no-referrer"/>
-  <title>剧场8 · 极速车机版 (方案A · 芯片硬解 Canvas 独占 · 行车免黑屏)</title>
+  <title>剧场8 · 极速车机版 (Tesla-Netflix 方案 · 硬件直解 · 行车防黑屏)</title>
   <script src="/static/hls.min.js"></script>
   <script src="/static/car-media-engine.js"></script>
   <style>
@@ -642,7 +642,7 @@
       <span class="logo-badge">极速车机版</span>
     </div>
     <div class="car-meta-status">
-      <div class="pill-badge active-cyan" id="badge-engine" onclick="openDrawer('drawer-engine')" style="cursor: pointer;" title="点击查看媒体引擎与解码诊断">⚡ 方案A: 芯片硬解 (Canvas 独占渲染 · 行车免黑屏 · 零服务器压力)</div>
+      <div class="pill-badge active-cyan" id="badge-engine" onclick="openDrawer('drawer-engine')" style="cursor: pointer;" title="点击查看媒体引擎与解码诊断">⚡ 特斯拉/新能源车机专属: 硬件直解 · 行车防黑屏 (Tesla-Netflix 方案)</div>
       <div class="pill-badge active-green" id="badge-parking">🅿 驻车影院 · 屏幕常亮</div>
       <div class="digital-clock" id="car-clock">16:30:00</div>
       <button class="btn-car" onclick="location.href='/'" style="padding: 6px 12px; font-size: 13px;">💻 桌面版</button>
@@ -719,16 +719,22 @@
     </div>
   </main>
 
-  <!-- 2. 核心独立车机播放器 (Native GPU VPU + WebAudio) -->
+  <!-- 2. 核心独立车机播放器 (Tesla-Netflix Bypass 架构) -->
   <section id="player-view">
-    <!-- 播放器视频与画布容器 -->
+    <!-- 播放器视频容器 -->
     <div class="canvas-container" id="touch-surface">
-      <!-- 方案A 独占渲染画布：WebGL 硬件加速渲染，全屏独占，车载行驶中绝不触发黑屏拦截 -->
-      <canvas id="car-canvas" style="display: block; position: absolute; top: 0; left: 0; width: 100%; height: 100%; object-fit: contain; z-index: 5;"></canvas>
-      <!-- 方案A 底层硬件解码管道：全屏置底硬件静默硬解，置底脱屏，车载系统无法检测到视频窗口 -->
-      <video id="car-video" playsinline webkit-playsinline x5-video-player-type="h5" x5-playsinline crossorigin="anonymous" style="position: absolute; top: 0; left: 0; width: 100%; height: 100%; object-fit: contain; opacity: 0.001; pointer-events: none; z-index: 1;"></video>
-      <!-- 标准 HTML5 Audio 备用节点 -->
+      <!-- 特斯拉/车机独立播放器框架 (采用 tesla-netflix 隔离 iframe + visibilitychange 拦截 + WebAudio 桥接) -->
+      <iframe id="car-player-frame" class="car-player-frame" src="about:blank" allow="autoplay; fullscreen" allowfullscreen style="width: 100%; height: 100%; border: none; position: absolute; top: 0; left: 0; z-index: 10; background: #000;"></iframe>
+      <!-- 兼容性保留节点 -->
+      <canvas id="car-canvas" style="display: none;"></canvas>
+      <video id="car-video" playsinline webkit-playsinline style="display: none;"></video>
       <audio id="car-audio" preload="auto" style="display: none;"></audio>
+    </div>
+
+    <!-- 浮动快速换源/选集快捷键 -->
+    <div class="player-floating-tools" style="position: absolute; right: 24px; top: 72px; z-index: 30; display: flex; flex-direction: column; gap: 10px;">
+      <button class="btn-car gold" onclick="openDrawer('drawer-lines')" style="padding: 8px 14px; font-size: 13px; box-shadow: 0 4px 16px rgba(0,0,0,0.6);" title="切换极速/备用线路">⚡ 换线路</button>
+      <button class="btn-car" onclick="openDrawer('drawer-eps')" style="padding: 8px 14px; font-size: 13px; box-shadow: 0 4px 16px rgba(0,0,0,0.6);" title="选择剧集">📑 选集</button>
     </div>
 
     <!-- 手势实时调节 HUD -->
@@ -2083,7 +2089,7 @@
     }
 
     let activePlayId = 0;
-    // 核心播放入口：GPU 原生硬件加速 + Hls.js 极速秒开 (1080P 首选 · 原生音画绝对同步 · 60FPS)
+    // 核心播放入口：Tesla-Netflix 方案 (iframe 沙箱隔离 + visibilitychange 防黑屏 + WebAudio 音频直连 + 原生 GPU 硬件直解)
     async function playMediaSource(url) {
       const playId = ++activePlayId;
       currentStreamUrl = url;
@@ -2094,125 +2100,49 @@
       if (audioStartFallbackTimer) clearTimeout(audioStartFallbackTimer);
       if (audio) { audio.pause(); audio.removeAttribute('src'); }
 
-      if (hlsInstance) {
-        try { hlsInstance.destroy(); } catch (_) {}
-        hlsInstance = null;
-      }
-
-      // 方案A 核心布局：顶层 100% 独占 WebGL Canvas，底层 1x1 隐藏 video 纯提供硬解帧与音频，行车绝不触发黑屏！
-      canvas.style.display = 'block';
-      canvas.style.opacity = '1';
-      canvas.style.position = 'absolute';
-      canvas.style.top = '0';
-      canvas.style.left = '0';
-      canvas.style.width = '100%';
-      canvas.style.height = '100%';
-      canvas.style.zIndex = '5';
-
-      video.crossOrigin = 'anonymous';
-      video.style.cssText = 'position: absolute; top: 0; left: 0; width: 100%; height: 100%; object-fit: contain; opacity: 0.001; pointer-events: none; z-index: 1;';
-      video.muted = false;
-
-      showGestureHud('⚡', '方案A 芯片硬解 · 1080P 秒开...', 0.6);
-      updateTechStats('方案A: 芯片硬解 ➔ Canvas (零黑屏)');
-
-      initCanvasRenderer();
-      renderFrameLoop();
-
-      // 初始化车载 Web Audio (杜比音效、低音增强、200%放大依然完整支持)
-      initWebAudio();
-      if (audioCtx && audioCtx.state === 'suspended') {
-        audioCtx.resume().catch(() => {});
-      }
-
-      video.pause();
-      video.removeAttribute('src');
-      video.load();
-      video.playbackRate = currentPlaybackRate || 1.0;
-
       let cleanUrl = url;
       if ((cleanUrl.includes('/play/') || cleanUrl.includes('/share/')) && !cleanUrl.includes('.m3u8') && !cleanUrl.includes('.mp4')) {
         cleanUrl = cleanUrl.replace(/\/+$/, '') + '/index.m3u8';
       }
 
-      let decodedHint = cleanUrl;
-      try { decodedHint = decodeURIComponent(cleanUrl); } catch (_) {}
-      const isHls = /\.m3u8(?:$|[?#&])/i.test(decodedHint) || /hls/i.test(decodedHint);
+      const movieTitle = (currentDetail && currentDetail.title) || '车载影院';
+      const eps = (currentDetail && currentDetail.episodes) || [];
+      const epTitle = (eps[currentEpIndex] && eps[currentEpIndex].title) || `第 ${currentEpIndex + 1} 集`;
 
-      if (isHls && window.Hls && Hls.isSupported()) {
-        const hls = new Hls({
-          enableWorker: true,
-          lowLatencyMode: false,
-          backBufferLength: 30,
-          maxBufferLength: 30,
-          maxMaxBufferLength: 60,
-          fragLoadingTimeOut: 15000,
-          manifestLoadingTimeOut: 10000,
-        });
-        hlsInstance = hls;
-        hls.loadSource(cleanUrl);
-        hls.attachMedia(video);
+      document.getElementById('home-view').style.display = 'none';
+      const carHeader = document.getElementById('car-header');
+      if (carHeader) carHeader.style.display = 'none';
+      const playerView = document.getElementById('player-view');
+      playerView.style.display = 'block';
+      document.body.style.overflow = 'hidden';
 
-        hls.on(Hls.Events.MANIFEST_PARSED, (event, data) => {
-          if (playId !== activePlayId) return;
-          // 1080P 优先选择最优清晰度档位
-          if (data && data.levels && data.levels.length > 1) {
-            let bestIdx = -1;
-            let bestDiff = 99999;
-            data.levels.forEach((lvl, idx) => {
-              const h = lvl.height || 0;
-              const diff = Math.abs(h - 1080);
-              if (diff < bestDiff) {
-                bestDiff = diff;
-                bestIdx = idx;
-              }
-            });
-            if (bestIdx >= 0) {
-              hls.currentLevel = bestIdx;
-              console.log(`[HLS] 1080P 优先档位已锁定: ${bestIdx} (${data.levels[bestIdx].height}P)`);
-            }
-          }
-          video.play().then(() => {
-            const btnAudioUnlock = document.getElementById('btn-audio-unlock');
-            if (btnAudioUnlock) btnAudioUnlock.style.display = 'none';
-          }).catch(e => {
-            console.warn('[HLS] autoplay deferred:', e);
-            const btnAudioUnlock = document.getElementById('btn-audio-unlock');
-            if (btnAudioUnlock) btnAudioUnlock.style.display = 'inline-flex';
-          });
-        });
-
-        hls.on(Hls.Events.ERROR, (event, data) => {
-          if (playId !== activePlayId) return;
-          if (data.fatal) {
-            console.warn('[HLS] Fatal error:', data.type, data.details);
-            switch (data.type) {
-              case Hls.ErrorTypes.NETWORK_ERROR:
-                hls.startLoad();
-                break;
-              case Hls.ErrorTypes.MEDIA_ERROR:
-                hls.recoverMediaError();
-                break;
-              default:
-                autoSwitchToNextFastLine('HLS线路异常');
-                break;
-            }
-          }
-        });
-      } else {
-        video.src = cleanUrl;
-        video.play().then(() => {
-          const btnAudioUnlock = document.getElementById('btn-audio-unlock');
-          if (btnAudioUnlock) btnAudioUnlock.style.display = 'none';
-        }).catch(e => {
-          console.warn('[Video] play deferred:', e);
-          const btnAudioUnlock = document.getElementById('btn-audio-unlock');
-          if (btnAudioUnlock) btnAudioUnlock.style.display = 'inline-flex';
-        });
+      const iframe = document.getElementById('car-player-frame');
+      if (iframe) {
+        const frameSrc = `/car/player_frame?url=${encodeURIComponent(cleanUrl)}&title=${encodeURIComponent(movieTitle)}&ep=${encodeURIComponent(epTitle)}`;
+        iframe.src = frameSrc;
       }
-
-      resetOverlayTimer();
     }
+
+    // 监听来自 iframe 播放器的双向事件指令 (行车无缝互通)
+    window.addEventListener('message', (ev) => {
+      const data = ev.data;
+      if (!data || typeof data !== 'object') return;
+      switch (data.type) {
+        case 'REQUEST_PREV':
+          prevEpisode();
+          break;
+        case 'REQUEST_NEXT':
+          nextEpisode();
+          break;
+        case 'CLOSE':
+          closePlayer();
+          break;
+        case 'LINE_ERROR':
+          console.warn('[Host] 播放器上报线路异常，自动切换下一条极速源...');
+          autoSwitchToNextFastLine('线路异常，自动重连');
+          break;
+      }
+    });
 
     async function startScheme3Playback(url, startSec = 0) {
       if (videoAbortCtrl) {
@@ -2753,6 +2683,10 @@
     }
 
     function closePlayer() {
+      const iframe = document.getElementById('car-player-frame');
+      if (iframe) {
+        iframe.src = 'about:blank';
+      }
       if (videoAbortCtrl) { videoAbortCtrl.abort(); videoAbortCtrl = null; }
       frameQueue.forEach(f => {
         if (f.bitmap && typeof f.bitmap.close === 'function') f.bitmap.close();
