@@ -733,10 +733,30 @@
       </div>
     </div>
 
-    <!-- 兼容性保留节点 (防止旧函数对 car-video/car-audio/car-canvas 产生 null 引用) -->
+    <!-- 兼容性保留节点 (防止旧函数对 car-video/car-audio/car-canvas 及旧 overlay 控件产生 null 引用) -->
     <canvas id="car-canvas" style="display: none;"></canvas>
     <video id="car-video" playsinline webkit-playsinline style="display: none;"></video>
     <audio id="car-audio" preload="auto" style="display: none;"></audio>
+    <div id="player-overlay" style="display: none !important;">
+      <div id="disp-movie-title"></div>
+      <div id="disp-ep-title"></div>
+      <div id="stat-renderer"></div>
+      <div id="btn-audio-unlock"></div>
+      <div id="stat-fps"></div>
+      <canvas id="spectrum-canvas"></canvas>
+      <div id="stat-audio"></div>
+      <div id="stat-colormode"></div>
+      <div id="touch-surface"></div>
+      <div id="btn-play-toggle"></div>
+      <div id="progress-bar"></div>
+      <div id="progress-fill"></div>
+      <div id="disp-cur-time"></div>
+      <div id="disp-dur-time"></div>
+      <div id="btn-speed"></div>
+      <div id="btn-quality"></div>
+      <div id="stat-decoder"></div>
+      <div id="btn-line-name"></div>
+    </div>
 
     <!-- 弹窗 1: 线路切换抽屉 -->
     <div class="car-drawer" id="drawer-lines">
@@ -2026,7 +2046,7 @@
       if (videoAbortCtrl) { videoAbortCtrl.abort(); videoAbortCtrl = null; }
       clearTimeout(scheme3WatchdogTimer);
       if (audioStartFallbackTimer) clearTimeout(audioStartFallbackTimer);
-      if (audio) { audio.pause(); audio.removeAttribute('src'); }
+      if (audio && typeof audio.pause === 'function') { audio.pause(); audio.removeAttribute('src'); }
 
       let cleanUrl = url;
       if ((cleanUrl.includes('/play/') || cleanUrl.includes('/share/')) && !cleanUrl.includes('.m3u8') && !cleanUrl.includes('.mp4')) {
@@ -2407,18 +2427,19 @@
         loadEpisode(epIdx);
       } catch (e) {
         console.error('加载影视失败:', e);
-        showGestureHud('❌', '网络异常，加载失败', 1.5);
+        showGestureHud('❌', '加载影视失败: ' + (e.message || e), 2.0);
       }
     }
 
     function loadEpisode(epIdx) {
       currentEpIndex = epIdx;
-      const eps = currentDetail.episodes || [];
+      const eps = (currentDetail && currentDetail.episodes) || [];
       const ep = eps[epIdx] || { token: currentCid, title: '正片' };
-      document.getElementById('disp-ep-title').innerText = ep.title || `第 ${epIdx + 1} 集`;
+      const epEl = document.getElementById('disp-ep-title');
+      if (epEl) epEl.innerText = ep.title || `第 ${epIdx + 1} 集`;
 
       // 请求车机专属线路：完全排除网盘 4K，聚合 Kanju 4K + 本地 4K 蓝光 + 1080P 高清
-      loadPlayLines(ep.token, currentDetail.title || '', epIdx + 1);
+      loadPlayLines(ep.token, (currentDetail && currentDetail.title) || '', epIdx + 1);
     }
 
     function getCleanLineName(line) {
@@ -2446,7 +2467,7 @@
       }
 
       let probeUrl = u;
-      if (probeUrl.startsWith('http') && !probeUrl.includes(location.host) && !probeUrl.includes('127.0.0.1') && !probeUrl.includes('/proxy?')) {
+      if (probeUrl.startsWith('http') && !probeUrl.includes(window.location.host) && !probeUrl.includes('127.0.0.1') && !probeUrl.includes('/proxy?')) {
         probeUrl = '/proxy?u=' + encodeURIComponent(probeUrl);
       }
       const t0 = performance.now();
@@ -2611,7 +2632,7 @@
         playUrl = playUrl.replace(/\/+$/, '') + '/index.m3u8';
       }
       // 检查是否需要代理
-      if (playUrl && playUrl.startsWith('http') && !playUrl.includes('127.0.0.1') && !playUrl.includes(location.host) && !playUrl.includes('/proxy?')) {
+      if (playUrl && playUrl.startsWith('http') && !playUrl.includes('127.0.0.1') && !playUrl.includes(window.location.host) && !playUrl.includes('/proxy?')) {
         playUrl = '/proxy?u=' + encodeURIComponent(playUrl);
       }
       playMediaSource(playUrl);
@@ -2722,7 +2743,7 @@
         this.src = fallbackSrc;
       };
 
-      const itemId = item.id || item.catalog_id;
+      const itemId = item.id || item.cid || item.catalog_id;
       card.onclick = () => {
         if (itemId) loadMovieAndPlay(itemId);
       };
