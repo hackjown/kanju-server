@@ -232,6 +232,15 @@
       <span id="spinner-text" style="font-size: 13px; color: #00e5ff; font-weight: 700;">正在建立极速硬件直解流...</span>
     </div>
 
+    <!-- 自动播放限制遮罩 (针对特斯拉/浏览器首播声音策略) -->
+    <div id="autoplay-unlock-overlay" style="display:none; position:absolute; inset:0; z-index:30; background:rgba(0,0,0,0.65); backdrop-filter:blur(4px); flex-direction:column; align-items:center; justify-content:center; cursor:pointer;" onclick="unlockAndResume()">
+      <div style="width:72px; height:72px; border-radius:50%; background:rgba(0,229,255,0.25); border:2px solid #00e5ff; display:flex; align-items:center; justify-content:center; box-shadow:0 0 25px rgba(0,229,255,0.4); margin-bottom:16px;">
+        <svg viewBox="0 0 24 24" style="width:36px; height:36px; fill:#00e5ff; margin-left:4px;"><polygon points="5 3 19 12 5 21 5 3"></polygon></svg>
+      </div>
+      <div style="font-size:18px; font-weight:800; color:#fff; letter-spacing:0.5px;">轻触屏幕开始播放</div>
+      <div style="font-size:13px; color:#94a3b8; margin-top:6px;">车机浏览器安全策略需首次触屏激活声音</div>
+    </div>
+
     <!-- 顶栏 HUD (与播放器内置底栏联动呼应) -->
     <div class="hud-top" id="hud-top">
       <div class="top-left">
@@ -440,8 +449,14 @@
         });
 
         player.on('ended', () => {
-          console.log('[Player] 本集播放结束，自动下一集');
-          notifyParent({ type: 'REQUEST_NEXT' });
+          const cur = Number(player.currentTime) || 0;
+          const dur = Number(player.duration) || 0;
+          if (hasReceivedFirstTime && cur > 10 && (dur <= 0 || cur >= dur - 5)) {
+            console.log('[Player] 本集播放结束，自动下一集, cur:', cur, 'dur:', dur);
+            notifyParent({ type: 'REQUEST_NEXT' });
+          } else {
+            console.warn('[Player] 视频提前中断或解码异常，忽略伪 ended 事件, cur:', cur, 'dur:', dur);
+          }
         });
 
         player.on('error', (err) => {
@@ -475,6 +490,8 @@
       const targetUrl = url.startsWith('http') ? url : new URL(url, window.location.href).href;
       streamUrl = targetUrl;
       hasReceivedFirstTime = false;
+      const unlockOverlay = document.getElementById('autoplay-unlock-overlay');
+      if (unlockOverlay) unlockOverlay.style.display = 'none';
       spinnerWrap.style.display = 'flex';
       spinnerText.innerText = '正在载入 1080P 硬件直解流...';
       startWatchdog();
@@ -483,9 +500,56 @@
         await player.loadSource(targetUrl, { isLive: false }, true);
       } catch (e) {
         console.warn('[Player] loadSource 失败:', e);
-        triggerFailover('源地址连接断开');
+        if (e && (e.name === 'NotAllowedError' || (e.message && (e.message.includes('interact') || e.message.includes('gesture'))))) {
+          console.warn('[Player] 浏览器阻止自动播放音频，等待用户触屏激活');
+          clearWatchdog();
+          spinnerWrap.style.display = 'none';
+          showAutoplayUnlockOverlay();
+        } else {
+          triggerFailover('源地址连接断开');
+        }
       }
     }
+
+    function showAutoplayUnlockOverlay() {
+      const overlay = document.getElementById('autoplay-unlock-overlay');
+      if (overlay) overlay.style.display = 'flex';
+    }
+
+    window.unlockAndResume = async function() {
+      const overlay = document.getElementById('autoplay-unlock-overlay');
+      if (overlay) overlay.style.display = 'none';
+      if (player) {
+        try {
+          if (player.audioContext && player.audioContext.state === 'suspended') {
+            await player.audioContext.resume();
+          }
+          if (player.audio && typeof player.audio.play === 'function') {
+            await player.audio.play();
+          }
+          await player.play();
+        } catch (e) {
+          console.warn('[Unlock] resume failed:', e);
+        }
+      }
+    };
+
+    function tryGlobalUnlock() {
+      const overlay = document.getElementById('autoplay-unlock-overlay');
+      if (overlay && overlay.style.display === 'flex') {
+        unlockAndResume();
+      } else if (player) {
+        if (player.audioContext && player.audioContext.state === 'suspended') {
+          player.audioContext.resume().catch(() => {});
+        }
+        if (player.audio && player.audio.paused && player.isPlaying) {
+          player.audio.play().catch(() => {});
+        }
+      }
+    }
+    document.addEventListener('pointerdown', tryGlobalUnlock);
+    document.addEventListener('click', tryGlobalUnlock);
+    document.addEventListener('touchstart', tryGlobalUnlock);
 
     // ─────────────────────────────────────────────────────────────
     // 7. 宿主通信协议 (与外部 car.html 无缝互通)

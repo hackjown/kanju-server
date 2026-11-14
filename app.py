@@ -582,30 +582,24 @@ def api_car_play(token):
         except Exception as e:
             print(f"[CarPlay] Collector lines error: {e}")
 
-    # 3. 车机专属 1080P 极速优先排序（优先 1080P 秒开官方高画质源，杜绝服务端重编码卡顿）：
-    # 梯队 1: 极速秒开线路（剧场8 官方1080P/720P + 采集源极速 1080P，码率适中秒开首选）
-    # 梯队 2: 流畅备用线路
-    # 梯队 3: 4K 超清专线（排在列表最末尾，供用户连接车库Wi-Fi时手动点选，决不作为默认源）
-    fast_lines = []
-    normal_lines = []
-    bitrate_4k_lines = []
+    # 3. 车机专属极速优先排序（优先 HLS .m3u8 分片流秒开，杜绝大 MP4 缓冲卡顿与防盗链）：
+    # 梯队 1: 极速秒开 HLS 专线（分片即开，0 缓冲，WebCodecs 硬件直解首选）
+    # 梯队 2: 普通/MP4 备用流
+    # 梯队 3: 4K 超清专线（排在列表末尾，大带宽 Wi-Fi 备用）
+    hls_fast = []
+    other_fast = []
+    bitrate_4k_lines = [l for l in (juchang8_4k_lines + collector_4k_lines) if l.get("url")]
 
-    for l in juchang8_normal_lines:
-        if l.get("url"):
-            fast_lines.append(l)
+    for l in (collector_normal_lines + juchang8_normal_lines):
+        if not l.get("url"):
+            continue
+        u = l.get("url")
+        if ".m3u8" in u:
+            hls_fast.append(l)
+        else:
+            other_fast.append(l)
 
-    for l in collector_normal_lines:
-        if l.get("url"):
-            if "⚡ 极速秒开" in l.get("label", ""):
-                fast_lines.append(l)
-            else:
-                normal_lines.append(l)
-
-    for l in (juchang8_4k_lines + collector_4k_lines):
-        if l.get("url"):
-            bitrate_4k_lines.append(l)
-
-    raw_final = fast_lines + normal_lines + bitrate_4k_lines
+    raw_final = hls_fast + other_fast + bitrate_4k_lines
     seen_urls = set()
     final_lines = []
     for item in raw_final:

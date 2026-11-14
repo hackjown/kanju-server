@@ -722,7 +722,7 @@
   <!-- 2. 核心独立车机播放器 (Tesla-Netflix Bypass 架构) -->
   <section id="player-view">
     <!-- 独立全屏播放框架 (Tesla-Netflix Bypass 原生沙箱隔离 + 硬件直解) -->
-    <iframe id="car-player-frame" class="car-player-frame" src="about:blank" allow="autoplay; fullscreen" allowfullscreen style="width: 100%; height: 100%; border: none; position: absolute; inset: 0; z-index: 10; background: #000;"></iframe>
+    <iframe id="car-player-frame" class="car-player-frame" src="about:blank" allow="autoplay *; fullscreen *; encrypted-media *" allowfullscreen style="width: 100%; height: 100%; border: none; position: absolute; inset: 0; z-index: 10; background: #000;"></iframe>
 
     <!-- 全局手势/状态 Toast 提示 HUD -->
     <div class="gesture-hud-center" id="gesture-hud" style="z-index: 80; pointer-events: none;">
