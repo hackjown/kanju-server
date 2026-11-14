@@ -29,7 +29,26 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-DB_PATH = os.environ.get("TVCAST_DB", os.path.join(HERE, "tvcast.db"))
+def _pick_db_path():
+    """配对数据必须放在挂载卷里，否则 docker compose up --build 重建容器后电视就要重新配对。"""
+    env = os.environ.get("TVCAST_DB")
+    if env:
+        return env
+    legacy = os.path.join(HERE, "tvcast.db")
+    for d in (os.path.join(HERE, "cache"), os.path.join(HERE, "data")):
+        if os.path.isdir(d) and os.access(d, os.W_OK):
+            target = os.path.join(d, "tvcast.db")
+            if not os.path.exists(target) and os.path.exists(legacy):
+                try:
+                    import shutil
+                    shutil.copy2(legacy, target)
+                except Exception:
+                    pass
+            return target
+    return legacy
+
+
+DB_PATH = _pick_db_path()
 PROTOCOL = "tv-cast.v1"
 HEARTBEAT_MS = 30000
 PAIRING_TTL = 600            # 配对码有效期（秒）
@@ -1165,6 +1184,7 @@ def register(app, me_func=None):
     from flask import request, jsonify
 
     init_db()
+    print("[tvcast] 配对数据库:", DB_PATH)
     API = Api(app)
     sock = Sock(app)
 
