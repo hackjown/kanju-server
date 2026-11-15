@@ -2933,6 +2933,11 @@ def proxy_v1(subpath):
                 r = {"object": "suggest.result", "suggestions": suggestions}
                 st = 200
 
+        if subpath.startswith("playback/adult-access/"):
+            _ADULT_VARIANTS.add(subpath.split("/")[-1])
+            if len(_ADULT_VARIANTS) > 5000:
+                _ADULT_VARIANTS.clear()
+
         if subpath.startswith("midnight-theater/discovery"):
             # 过滤掉午夜剧场发现流里的外部推广/博彩广告
             if "showcase" in r and isinstance(r["showcase"], list):
@@ -2944,6 +2949,8 @@ def proxy_v1(subpath):
             if len(parts) >= 2:
                 cid = parts[1]
                 if "/detail" in subpath:
+                    if st == 200 and isinstance(r, dict) and (r.get("content_kind") == "adult" or "18+" in " ".join(str(g) for g in (r.get("genres") or []))):
+                        _ADULT_VARIANTS.add(cid)
                     if st == 200 and isinstance(r, dict) and r.get("title"):
                         _CID_TO_TITLE[cid] = r["title"]
                         save_catalog_cache(f"cid:{cid}", r["title"], data=r)
@@ -2967,6 +2974,7 @@ def proxy_v1(subpath):
                                 ep_n = ep_it.get("number") or ep_it.get("sequence_index") or 1
                                 ep_t = ep_it.get("title") or ""
                                 _EP_TOKEN_MAP[tok] = {
+                                    "cid": cid,
                                     "title": m_title,
                                     "ep_num": ep_n,
                                     "ep_title": ep_t
@@ -3049,6 +3057,27 @@ def proxy_v1(subpath):
                             not re.match(r"^\s*(第\s*\d+\s*[集话期]|EP?\s*\d+|\d+)\s*$", cur_disp, re.I):
                         m_title = cur_disp   # “第1集”这种是集名不是片名，拿去搜网盘只会搜到无关分享
 
+            # 成人/午夜伦理片：网盘与 4K 采集源按片名模糊匹配只会匹配到无关影片，且网盘搜索要十几秒，
+            # 会让前端解析超时报“当前线路暂时无法播放”。这类影片直接用上游原线路，不做注入。
+            is_adult = False
+            try:
+                _cd = None
+                if cid_from_ref:
+                    _cc = get_catalog_cache(f"cid:{cid_from_ref}")
+                    if _cc and _cc.get("data_json"):
+                        _cd = json.loads(_cc["data_json"])
+                    if not isinstance(_cd, dict):
+                        _cd, _ = api_get(f"/v1/catalog/{cid_from_ref}/detail", ttl=3600)
+                if isinstance(_cd, dict):
+                    _gen = " ".join(str(g) for g in (_cd.get("genres") or []))
+                    is_adult = (_cd.get("content_kind") == "adult") or ("18+" in _gen)
+                if (cid_from_ref and cid_from_ref in _ADULT_VARIANTS) or (ep_info.get("cid") in _ADULT_VARIANTS) or (tok in _ADULT_VARIANTS):
+                    is_adult = True
+            except Exception:
+                pass
+            if is_adult and st == 200 and isinstance(r, dict) and r.get("line_options"):
+                m_title = ""
+
             # 关键保障：若上游接口 502/503 或未返回正常播放结构，启动本地应急播放合成机制，绝不报“当前线路暂时无法播放”！
             if st != 200 or not isinstance(r, dict) or "line_options" not in r:
                 r = {
@@ -3084,7 +3113,7 @@ def proxy_v1(subpath):
             if m_title:
                 # 1. 获取网盘资源 (115、夸克、UC)
                 try:
-                    pan_shares = KPAN.search_pan_shares(m_title)
+                    pan_shares = _pan_search_budget(m_title, 5.0)
                     if pan_shares:
                         for idx, s in enumerate(pan_shares[:3]):
                             ptype = (s.get("pan_type") or "quark").lower()
@@ -3176,7 +3205,10 @@ def proxy_v1(subpath):
                 txt = ((l.get("label") or "") + " " + (l.get("display_label") or "") + " " + (l.get("id") or "") + " " + (l.get("definition") or "")).upper()
                 return ("4K" in txt or "2160P" in txt or "UHD" in txt or "原画" in txt or "超清4K" in txt or "蓝光4K" in txt)
 
-            for l in raw_upstream_lines:
+            if is_adult:
+                r["line_options"] = raw_upstream_lines
+                raw_upstream_lines = None
+            for l in (raw_upstream_lines or []):
                 l["selected"] = False
                 l["default_priority"] = False
                 if _is_juchang8_4k(l):
@@ -3226,11 +3258,12 @@ def proxy_v1(subpath):
             elif ordered_lines:
                 chosen_line = ordered_lines[0]
 
-            if chosen_line:
+            if chosen_line and not is_adult:
                 chosen_line["selected"] = True
                 chosen_line["default_priority"] = True
 
-            r["line_options"] = ordered_lines
+            if not is_adult:
+                r["line_options"] = ordered_lines
 
     if isinstance(r, (dict, list)):
         resp = jsonify(r)
@@ -3240,6 +3273,34 @@ def proxy_v1(subpath):
     resp.headers["Access-Control-Allow-Origin"] = "*"
     resp.headers["Access-Control-Allow-Credentials"] = "true"
     return resp
+
+
+
+# ---- 播放解析时间预算：网盘搜索超过预算就先跳过，后台继续搜，结果进缓存，下次打开即可用 ----
+import concurrent.futures as _cf
+_PAN_POOL = _cf.ThreadPoolExecutor(max_workers=4)
+_PAN_INFLIGHT = {}
+_ADULT_VARIANTS = set()
+
+
+def _pan_search_budget(title, budget):
+    fut = _PAN_INFLIGHT.get(title)
+    if fut is None or (fut.done() and fut.exception() is not None):
+        fut = _PAN_POOL.submit(KPAN.search_pan_shares, title)
+        _PAN_INFLIGHT[title] = fut
+    try:
+        res = fut.result(timeout=budget)
+    except _cf.TimeoutError:
+        print(f"[KanjuPan] 《{title}》网盘搜索超过 {budget}s，本次先跳过，后台继续", flush=True)
+        return []
+    except Exception:
+        _PAN_INFLIGHT.pop(title, None)
+        return []
+    if len(_PAN_INFLIGHT) > 200:
+        _PAN_INFLIGHT.clear()
+    else:
+        _PAN_INFLIGHT.pop(title, None)
+    return res or []
 
 
 @app.route("/api/pan/stream/<path:pwd_id>")
