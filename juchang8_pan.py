@@ -703,19 +703,8 @@ def parse_pan_video_link(link_url, pan_type=None, passcode=""):
             pwd_id = link_url.split("/s/")[-1].split("?")[0].strip() if "/s/" in link_url else link_url
             return auto_transfer_and_play_115(pwd_id, cookie, passcode=passcode)
         else: # UC
-            return {
-                "ok": True,
-                "pan_type": "uc",
-                "title": "UC网盘超清解析",
-                "stream_url": f"https://drive.uc.cn/stream?link={link_url}",
-                "files": [
-                    {
-                        "name": "UC网盘超清切片.m3u8",
-                        "stream_url": f"https://drive.uc.cn/stream?link={link_url}",
-                        "quality": "1080P/4K"
-                    }
-                ]
-            }
+            # UC 转存取流还没接上，老实返回失败，让上层打日志并降级，不再给播放器一个假地址
+            return {"ok": False, "error": "UC 网盘转存播放暂未实现"}
     except Exception as e:
         return {"ok": False, "error": f"网盘解析失败: {e}"}
 
@@ -1004,6 +993,21 @@ def _quark_is_video(f):
         any((f.get("file_name") or "").lower().endswith(ext) for ext in _QUARK_VIDEO_EXTS)
 
 
+_QUARK_JUNK_WORDS = ("彩蛋", "预告", "花絮", "片花", "广告", "宣传", "sample", "trailer", "说明", "公告")
+_QUARK_MIN_EP_BYTES = 80 * 1024 * 1024   # 正片至少 80MB，小于这个基本是彩蛋/广告/预告
+
+
+def _quark_is_episode(f):
+    """是不是正片：视频 + 体积够大 + 名字不像彩蛋广告"""
+    if not _quark_is_video(f):
+        return False
+    size = f.get("size") or 0
+    name = (f.get("file_name") or "").lower()
+    if size and size < _QUARK_MIN_EP_BYTES:
+        return False
+    return not any(w in name for w in _QUARK_JUNK_WORDS)
+
+
 def _quark_is_dir(f):
     return bool(f.get("dir")) or f.get("file_type") == 0 and not _quark_is_video(f)
 
@@ -1026,11 +1030,14 @@ def _quark_list_videos(pwd_id, stoken, headers, max_depth=3, max_dirs=12):
             except Exception as e:
                 err = e
                 break
+            if d.get("code") not in (0, None):
+                err = f"{d.get('code')} {d.get('message')}"
+                break
             items = (d.get("data") or {}).get("list") or []
             if fid == "0":
                 top.extend(items)
             for f in items:
-                if _quark_is_video(f):
+                if _quark_is_episode(f):
                     videos.append(f)
                 elif _quark_is_dir(f) and depth < max_depth:
                     queue.append((f.get("fid"), depth + 1))
@@ -1079,6 +1086,18 @@ def quark_share_alive(pwd_id, passcode="", cookie=""):
             alive = not _quark_dead_msg(t.get("message")) and t.get("code") not in (41004, 41006, 41008, 41011, 41012)
             if not alive:
                 print(f"[KanjuPan] 夸克分享已失效，移出索引: {pwd_id} ({t.get('message')})")
+                with _db() as conn:
+                    conn.execute("DELETE FROM pan_shares_index WHERE pwd_id=?", (pwd_id,))
+                    conn.commit()
+        else:
+            # 分享还在，但内容可能已被审核清空，或只剩彩蛋/广告小文件 —— 也算不能用
+            top, eps, err = _quark_list_videos(pwd_id, t["data"]["stoken"], headers, max_depth=3, max_dirs=6)
+            if err:
+                return True      # 列表接口抽风不算失效，也不缓存
+            if not eps:
+                alive = False
+                why = "内容已被清空" if not top else f"没有正片（只有：{(top[0].get('file_name') or '')[:20]} 等）"
+                print(f"[KanjuPan] 夸克分享不可用，移出索引: {pwd_id} ({why})")
                 with _db() as conn:
                     conn.execute("DELETE FROM pan_shares_index WHERE pwd_id=?", (pwd_id,))
                     conn.commit()
@@ -1288,14 +1307,14 @@ def auto_transfer_and_play_quark(pwd_id, cookie, passcode=""):
         return {"ok": False, "error": f"请求夸克文件详情异常: {err}"}
 
     if not video_files:
-        sample_name = file_list[0].get("file_name") if file_list else "空分享"
+        sample_name = file_list[0].get("file_name") if file_list else "分享内容已被清空"
         # 如果是非视频文件（如纯音频、文本等），从索引中剔除
         with _db() as conn:
             conn.execute("DELETE FROM pan_shares_index WHERE pwd_id=?", (pwd_id,))
             conn.commit()
         return {
             "ok": False,
-            "error": f"该网盘分享内未检测到视频文件（包含文件：{sample_name} 等，非影片视频）"
+            "error": f"该网盘分享里没有正片（{sample_name}；彩蛋/预告/小于80MB 的不算）"
         }
 
     # 智能优选：优先选择 SDR / MAXPLUS / HDR10 等在浏览器中色彩完全正常的视频，规避纯杜比Profile 5
