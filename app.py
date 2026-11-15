@@ -3441,6 +3441,8 @@ def api_admin_reset_password(uid):
 @app.route("/api/admin/users/<int:uid>/toggle-status", methods=["POST"])
 @_admin_required
 def api_admin_toggle_status(uid):
+    if KM.is_owner_uid(uid):
+        return jsonify({"ok": False, "error": "站长账号 hackjown 不能被禁用、删除或降级"}), 400
     st = KM.toggle_user_status(uid)
     return jsonify({"ok": True, "new_status": st})
 
@@ -3448,6 +3450,8 @@ def api_admin_toggle_status(uid):
 @app.route("/api/admin/users/<int:uid>/set-role", methods=["POST"])
 @_admin_required
 def api_admin_set_role(uid):
+    if KM.is_owner_uid(uid):
+        return jsonify({"ok": False, "error": "站长账号 hackjown 不能被禁用、删除或降级"}), 400
     d = request.get_json(silent=True) or {}
     role = d.get("role") or "user"
     KM.set_user_role(uid, role)
@@ -3457,6 +3461,8 @@ def api_admin_set_role(uid):
 @app.route("/api/admin/users/<int:uid>", methods=["DELETE"])
 @_admin_required
 def api_admin_delete_user(uid):
+    if KM.is_owner_uid(uid):
+        return jsonify({"ok": False, "error": "站长账号 hackjown 不能被禁用、删除或降级"}), 400
     KM.delete_user(uid)
     return jsonify({"ok": True})
 

