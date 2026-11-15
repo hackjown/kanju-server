@@ -33,6 +33,58 @@ def _db():
     return conn
 
 
+# ---- 网盘账号持久化备份 ----
+# juchang8.db 是单文件挂载 + WAL 模式，-wal 文件留在容器里，重建容器会丢最近写入（比如刚扫码的 UC）。
+# 所以每次账号变动都同步一份到 /app/cache（整个目录挂载在宿主机），启动时缺什么就从这里补回来。
+_ACC_BACKUP = os.path.join(HERE, "cache", "pan_accounts.json")
+_ACC_RESTORED = False
+
+
+def _persist_accounts():
+    try:
+        os.makedirs(os.path.dirname(_ACC_BACKUP), exist_ok=True)
+        with _db() as conn:
+            rows = [dict(r) for r in conn.execute("SELECT * FROM pan_accounts").fetchall()]
+        tmp = _ACC_BACKUP + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump({"saved_at": int(time.time()), "accounts": rows}, f, ensure_ascii=False)
+        os.replace(tmp, _ACC_BACKUP)
+    except Exception as e:
+        print(f"[KanjuPan] 备份网盘账号失败: {e}")
+
+
+def _restore_accounts():
+    if not os.path.exists(_ACC_BACKUP):
+        _persist_accounts()
+        return
+    try:
+        with open(_ACC_BACKUP, encoding="utf-8") as f:
+            saved = json.load(f).get("accounts") or []
+        restored = 0
+        with _db() as conn:
+            for a in saved:
+                cur = conn.execute("SELECT id, updated_at FROM pan_accounts WHERE pan_type=? ORDER BY id DESC LIMIT 1",
+                                   (a.get("pan_type"),)).fetchone()
+                if cur and (cur["updated_at"] or 0) >= (a.get("updated_at") or 0):
+                    continue
+                if cur:
+                    conn.execute("UPDATE pan_accounts SET name=?, cookie=?, user_name=?, vip_type=?, status=?, updated_at=? WHERE id=?",
+                                 (a.get("name"), a.get("cookie"), a.get("user_name"), a.get("vip_type"),
+                                  a.get("status") or "active", a.get("updated_at"), cur["id"]))
+                else:
+                    conn.execute("INSERT INTO pan_accounts (pan_type, name, cookie, user_name, vip_type, status, created_at, updated_at) "
+                                 "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                                 (a.get("pan_type"), a.get("name"), a.get("cookie"), a.get("user_name"), a.get("vip_type"),
+                                  a.get("status") or "active", a.get("created_at"), a.get("updated_at")))
+                restored += 1
+            conn.commit()
+        if restored:
+            print(f"[KanjuPan] 已从 cache/pan_accounts.json 恢复 {restored} 个网盘账号")
+        _persist_accounts()
+    except Exception as e:
+        print(f"[KanjuPan] 恢复网盘账号失败: {e}")
+
+
 
 def has_active_pan_account(pan_type=None):
     """检查本地是否已绑定并激活网盘账号或点115账号"""
@@ -91,6 +143,10 @@ def init_pan_db():
         )
         """)
         conn.commit()
+    global _ACC_RESTORED
+    if not _ACC_RESTORED:
+        _ACC_RESTORED = True
+        _restore_accounts()
 
 
 def _generate_qr_svg(text):
@@ -311,25 +367,28 @@ def check_qr_quark(session_row):
             if not st:
                 return "scanned", None, None
                 
-            # 拿 service_ticket 请求换取夸克网页端完整 Cookie (__puus 等)
+            # 拿 service_ticket 换夸克网页端 Cookie：account/info 下发 __pus，再请求一次 config 拿到 __puus
             sess = requests.Session()
-            sess.headers.update(headers)
-            info_url = f"https://pan.quark.cn/account/info?st={st}&lw=scan"
-            r_info = sess.get(info_url, timeout=6)
-            
-            cookie_dict = sess.cookies.get_dict()
-            cookie_str = "; ".join([f"{k}={v}" for k, v in cookie_dict.items()])
-            
-            # 从 Set-Cookie 响应头抽取 __puus
-            if "__puus" not in cookie_str:
-                raw_cookies = r_info.headers.get("Set-Cookie", "")
-                m = re.search(r'__puus=([^;]+)', raw_cookies)
-                if m:
-                    cookie_str = f"__puus={m.group(1)}; " + cookie_str
-                    
-            if not cookie_str or "__puus" not in cookie_str:
-                cookie_str = f"__puus={st}; " + cookie_str
-                
+            sess.headers.update({"User-Agent": headers["User-Agent"], "Referer": "https://pan.quark.cn/",
+                                 "Origin": "https://pan.quark.cn"})
+            r_info = sess.get("https://pan.quark.cn/account/info", params={"st": st, "lw": "scan"}, timeout=8)
+            try:
+                sess.get("https://drive-pc.quark.cn/1/clouddrive/config",
+                         params={"pr": "ucpro", "fr": "pc", "uc_param_str": ""}, timeout=6)
+            except Exception:
+                pass
+            jar = sess.cookies.get_dict()
+            raw = r_info.headers.get("Set-Cookie", "")
+            for name in ("__pus", "__puus", "__kp", "__kps", "__ktd", "__uid"):
+                if name not in jar:
+                    m = re.search(re.escape(name) + r"=([^;]+)", raw)
+                    if m:
+                        jar[name] = m.group(1)
+            if "__pus" not in jar and "__puus" not in jar:
+                print(f"[KanjuPan] 夸克扫码已确认但没拿到 __pus: http={r_info.status_code} cookies={list(jar)} body={r_info.text[:160]}")
+                return "error", None, None
+            cookie_str = "; ".join(f"{k}={v}" for k, v in jar.items())
+
             info_data = {}
             try:
                 info_data = r_info.json().get("data") or {}
@@ -552,6 +611,7 @@ def get_qr_session_status(session_id):
             conn.execute("UPDATE pan_qr_sessions SET status='confirmed', result_cookie=?, result_user=? WHERE session_id=?",
                          (cookie_str, user_json, session_id))
             conn.commit()
+            _persist_accounts()
             
             return {
                 "ok": True,
@@ -604,6 +664,8 @@ def list_pan_accounts():
                 d["cookie_mask"] = (ck[:16] + "..." + ck[-8:])
             else:
                 d["cookie_mask"] = ck
+            if d.get("pan_type") in ("quark", "uc") and "__pus=" not in ck and "__puus=" not in ck.replace("__puus=st", ""):
+                d["cookie_mask"] = "⚠️ Cookie 不完整（缺 __pus），请重新扫码或粘贴网页端 Cookie · " + d["cookie_mask"]
             accounts.append(d)
         return accounts
 
@@ -644,6 +706,7 @@ def save_pan_account_manual(pan_type, name, cookie):
             VALUES (?, ?, ?, ?, ?, 'active', ?, ?)
             """, (pan_type, name.strip(), cookie.strip(), user_name, vip_type, now, now))
         conn.commit()
+    _persist_accounts()
     return True
 
 
@@ -652,6 +715,7 @@ def delete_pan_account(account_id):
     with _db() as conn:
         conn.execute("DELETE FROM pan_accounts WHERE id=?", (account_id,))
         conn.commit()
+    _persist_accounts()
     return True
 
 
@@ -703,8 +767,9 @@ def parse_pan_video_link(link_url, pan_type=None, passcode=""):
             pwd_id = link_url.split("/s/")[-1].split("?")[0].strip() if "/s/" in link_url else link_url
             return auto_transfer_and_play_115(pwd_id, cookie, passcode=passcode)
         else: # UC
-            # UC 转存取流还没接上，老实返回失败，让上层打日志并降级，不再给播放器一个假地址
-            return {"ok": False, "error": "UC 网盘转存播放暂未实现"}
+            import juchang8_qu as QU
+            pwd_id = link_url.split("/s/")[-1].split("?")[0].strip() if "/s/" in link_url else link_url
+            return QU.transfer_and_play("uc", pwd_id, cookie, passcode=passcode)
     except Exception as e:
         return {"ok": False, "error": f"网盘解析失败: {e}"}
 
@@ -723,9 +788,95 @@ if __name__ == "__main__":
 
 # 预置开源公共 PanSou 检索节点 (TVBox 生态常见标准 REST 接口)
 DEFAULT_PANSO_APIS = [
-    "https://api.panso.me/api/search",
-    "https://so.ypan.cc/api/search"
+    # PanSou 公共实例（聚合 90+ TG 频道和几十个资源站），可在 pan_settings 里用 key=pansou_apis 覆盖（逗号分隔）
+    # 推荐自己用 docker 部署一份 ghcr.io/fish2018/pansou-web，填 http://宿主机IP:端口/api/search
+    "https://so.252035.xyz/api/search",
+    "https://pansou.app/api/search",
 ]
+
+
+def _pansou_endpoints():
+    try:
+        with _db() as conn:
+            row = conn.execute("SELECT val FROM pan_settings WHERE key='pansou_apis'").fetchone()
+            if row and row["val"]:
+                return [u.strip() for u in row["val"].split(",") if u.strip()]
+    except Exception:
+        pass
+    return DEFAULT_PANSO_APIS
+
+
+def _norm_title(t):
+    return re.sub(r"[\s·・:：\-_（）()【】\[\]《》]", "", (t or "").lower())
+
+
+_PANSOU_CACHE = {}
+
+
+def search_pansou(keyword, types=("quark", "uc"), limit_each=12):
+    """用 PanSou 搜夸克/UC 分享：标题必须包含片名，按时间新到旧，写入本地索引"""
+    types = [t for t in types if t in ("quark", "uc")] or ["quark", "uc"]
+    ck = (keyword, tuple(types))
+    hit = _PANSOU_CACHE.get(ck)
+    if hit and time.time() - hit[0] < 600:
+        return [dict(x) for x in hit[1]]
+    kw_n = _norm_title(keyword)
+    out, seen = [], set()
+
+    def _one(ep):
+        try:
+            r = requests.get(ep, params={"kw": keyword, "cloud_types": ",".join(types), "res": "merge"},
+                             timeout=9, headers={"User-Agent": "Mozilla/5.0 Juchang8Pan/1.1"})
+            if r.status_code != 200:
+                print(f"[KanjuPan] PanSou {ep} 返回 {r.status_code}")
+                return {}
+            return ((r.json() or {}).get("data") or {}).get("merged_by_type") or {}
+        except Exception as e:
+            print(f"[KanjuPan] PanSou {ep} 超时/异常: {type(e).__name__}")
+            return {}
+
+    from concurrent.futures import ThreadPoolExecutor
+    eps_ = _pansou_endpoints()
+    with ThreadPoolExecutor(max_workers=max(1, len(eps_))) as ex:
+        all_merged = list(ex.map(_one, eps_))
+    for merged in all_merged:
+        for pt in types:
+            n = 0
+            for it in merged.get(pt) or []:
+                url = it.get("url") or ""
+                m = re.search(r"/s/([A-Za-z0-9]+)", url)
+                note = (it.get("note") or "").strip()
+                if not m or kw_n not in _norm_title(note[:120]):
+                    continue
+                pwd = m.group(1)
+                if pwd in seen:
+                    continue
+                seen.add(pwd)
+                pw = it.get("password") or ""
+                if not pw:
+                    pm = re.search(r"[?&]pwd=([A-Za-z0-9]+)", url)
+                    pw = pm.group(1) if pm else ""
+                up = note.upper()
+                tag = "4K原画" if ("4K" in up or "2160" in up) else ("1080P" if "1080" in up else "高清")
+                out.append({"keyword": keyword, "pan_type": pt,
+                            "share_url": f"https://pan.quark.cn/s/{pwd}" if pt == "quark" else f"https://drive.uc.cn/s/{pwd}",
+                            "pwd_id": pwd, "passcode": pw, "title": note[:120], "quality_tag": tag,
+                            "datetime": it.get("datetime") or ""})
+                n += 1
+                if n >= limit_each:
+                    break
+    if out:
+        now = int(time.time())
+        with _db() as conn:
+            for it in out:
+                if not conn.execute("SELECT id FROM pan_shares_index WHERE pwd_id=?", (it["pwd_id"],)).fetchone():
+                    conn.execute("INSERT INTO pan_shares_index (keyword, pan_type, share_url, pwd_id, passcode, title, quality_tag, created_at) "
+                                 "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                                 (keyword, it["pan_type"], it["share_url"], it["pwd_id"], it["passcode"], it["title"], it["quality_tag"], now))
+            conn.commit()
+        _PANSOU_CACHE[ck] = (time.time(), [dict(x) for x in out])
+        print(f"[KanjuPan] PanSou 搜到 {keyword}: 夸克 {sum(1 for x in out if x['pan_type']=='quark')} 个，UC {sum(1 for x in out if x['pan_type']=='uc')} 个")
+    return out
 
 def init_pan_advanced_db():
     """补齐网盘高级索引表与转存记录表"""
@@ -755,6 +906,10 @@ def init_pan_advanced_db():
             expires_at INTEGER        -- 过期时间戳 (默认创建后 24 小时)
         )
         """)
+        try:
+            conn.execute("ALTER TABLE pan_transfers ADD COLUMN share_key TEXT DEFAULT ''")
+        except Exception:
+            pass
         conn.execute("""
         CREATE TABLE IF NOT EXISTS pan_settings (
             key TEXT PRIMARY KEY,
@@ -771,7 +926,7 @@ def init_pan_advanced_db():
             ("周处除三害", "quark", "https://pan.quark.cn/s/d8745bc3901a", "d8745bc3901a", "", "周处除三害 4K 未删减超清珍藏版", "4K原画"),
             ("漫长的季节", "115", "https://115.com/s/sw3p888999a", "sw3p888999a", "", "漫长的季节 全集 4K 杜比视界蓝光", "4K蓝光原盘")
         ]
-        for s in sample_seeds:
+        for s in []:   # 旧版的示例片单是假链接，不再写入（已有的会被有效性检查自动清掉）
             conn.execute("""
             INSERT OR IGNORE INTO pan_shares_index 
             (keyword, pan_type, share_url, pwd_id, passcode, title, quality_tag, created_at)
@@ -785,6 +940,10 @@ def search_pan_online(keyword, pan_type=None):
     ext_results = []
     seen = set()
     now = int(time.time())
+    if not pan_type or pan_type in ("quark", "uc"):
+        got = search_pansou(keyword, [pan_type] if pan_type else ["quark", "uc"])
+        if got:
+            return got
     
     # 1. 优先调用 pansearch.me 聚合 API
     try:
@@ -1069,62 +1228,41 @@ def _quark_wait_task(task_id, headers, tries=10):
 _QUARK_ALIVE = {}
 
 
-def quark_share_alive(pwd_id, passcode="", cookie=""):
-    """快速检查夸克分享是否还有效（缓存 6 小时）；失效的会从索引里删掉"""
-    hit = _QUARK_ALIVE.get(pwd_id)
-    if hit and time.time() - hit[0] < 21600:
-        return hit[1]
-    headers = {"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-               "Referer": "https://pan.quark.cn/", "Content-Type": "application/json"}
-    if cookie:
-        headers["Cookie"] = cookie
-    alive = True
-    try:
-        t = requests.post("https://drive-pc.quark.cn/1/clouddrive/share/sharepage/token?pr=ucpro&fr=pc",
-                          json={"pwd_id": pwd_id, "passcode": passcode or ""}, headers=headers, timeout=5).json()
-        if t.get("code") != 0 or not (t.get("data") or {}).get("stoken"):
-            alive = not _quark_dead_msg(t.get("message")) and t.get("code") not in (41004, 41006, 41008, 41011, 41012)
-            if not alive:
-                print(f"[KanjuPan] 夸克分享已失效，移出索引: {pwd_id} ({t.get('message')})")
-                with _db() as conn:
-                    conn.execute("DELETE FROM pan_shares_index WHERE pwd_id=?", (pwd_id,))
-                    conn.commit()
-        else:
-            # 分享还在，但内容可能已被审核清空，或只剩彩蛋/广告小文件 —— 也算不能用
-            top, eps, err = _quark_list_videos(pwd_id, t["data"]["stoken"], headers, max_depth=3, max_dirs=6)
-            if err:
-                return True      # 列表接口抽风不算失效，也不缓存
-            if not eps:
-                alive = False
-                why = "内容已被清空" if not top else f"没有正片（只有：{(top[0].get('file_name') or '')[:20]} 等）"
-                print(f"[KanjuPan] 夸克分享不可用，移出索引: {pwd_id} ({why})")
-                with _db() as conn:
-                    conn.execute("DELETE FROM pan_shares_index WHERE pwd_id=?", (pwd_id,))
-                    conn.commit()
-    except Exception:
-        return True          # 网络问题不算失效，也不缓存
-    _QUARK_ALIVE[pwd_id] = (time.time(), alive)
-    return alive
+def quark_share_alive(pwd_id, passcode="", cookie="", pan="quark"):
+    import juchang8_qu as QU
+    return QU.share_alive(pan, pwd_id, passcode, cookie)
+
+
+def _filter_alive(res, keyword):
+    cand = [r for r in res if (r.get("pan_type") or "").lower() in ("quark", "uc")]
+    if not cand:
+        return res, 0
+    from concurrent.futures import ThreadPoolExecutor
+    check = cand[:10]
+    with ThreadPoolExecutor(max_workers=6) as ex:
+        alive = list(ex.map(lambda r: quark_share_alive(r.get("pwd_id") or "", r.get("passcode") or "", "",
+                                                        (r.get("pan_type") or "quark").lower()), check))
+    dead = {id(r) for r, ok in zip(check, alive) if not ok}
+    return [r for r in res if id(r) not in dead], len(dead)
 
 
 def search_pan_shares(keyword, pan_type=None):
-    """搜索网盘资源，并把已失效的夸克分享提前筛掉（像 115 那样只给出能用的）"""
+    """搜索网盘资源，夸克/UC 结果逐个验证（分享还在 + 里面有正片），像 115 那样只给出能用的"""
     res = _search_pan_shares_raw(keyword, pan_type) or []
-    qk = [r for r in res if (r.get("pan_type") or "").lower() == "quark"]
-    if not qk:
-        return res
-    try:
-        cookie = get_active_pan_cookie("quark") or ""
-    except Exception:
-        cookie = ""
-    from concurrent.futures import ThreadPoolExecutor
-    check = qk[:8]
-    with ThreadPoolExecutor(max_workers=6) as ex:
-        alive = list(ex.map(lambda r: quark_share_alive(r.get("pwd_id") or "", r.get("passcode") or "", cookie), check))
-    dead = {id(r) for r, ok in zip(check, alive) if not ok}
-    out = [r for r in res if id(r) not in dead]
-    if dead:
-        print(f"[KanjuPan] {keyword}: 过滤掉 {len(dead)} 个失效夸克分享，剩 {len(out)} 个")
+    out, n_dead = _filter_alive(res, keyword)
+    want_qu = not pan_type or pan_type in ("quark", "uc")
+    has_qu = any((r.get("pan_type") or "").lower() in ("quark", "uc") for r in out)
+    if want_qu and not has_qu:
+        # 本地索引里的都不能用了，现搜一次 PanSou 再验证
+        fresh = search_pansou(keyword, [pan_type] if pan_type else ["quark", "uc"])
+        if fresh:
+            more, d2 = _filter_alive(fresh, keyword)
+            n_dead += d2
+            known = {r.get("pwd_id") for r in out}
+            out += [r for r in more if r.get("pwd_id") not in known]
+            out.sort(key=rank_pan_share, reverse=True)
+    if n_dead:
+        print(f"[KanjuPan] {keyword}: 过滤掉 {n_dead} 个不可用的夸克/UC分享，剩 {len(out)} 个")
     return out
 
 
@@ -1269,6 +1407,11 @@ def quark_get_or_create_temp_dir(cookie):
 
 
 def auto_transfer_and_play_quark(pwd_id, cookie, passcode=""):
+    import juchang8_qu as QU
+    return QU.transfer_and_play("quark", pwd_id, cookie, passcode)
+
+
+def _old_auto_transfer_and_play_quark(pwd_id, cookie, passcode=""):
     """夸克网盘全自动转存与取流工作流：
     1. 调用 /sharepage/token 换取 stoken
     2. 调用 /sharepage/detail 获取分享内文件列表，过滤视频文件
@@ -1597,26 +1740,17 @@ def purge_expired_transfers(force_all=False):
             return {"ok": True, "purged_count": 0, "message": "当前没有需要清理的过期文件"}
             
         purged_count = 0
-        # 获取夸克账号 Cookie 进行删除操作
-        acc = conn.execute("SELECT cookie FROM pan_accounts WHERE pan_type='quark' AND status='active' LIMIT 1").fetchone()
-        cookie = acc["cookie"] if acc else ""
-        
-        headers = {
-            "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-            "Cookie": cookie,
-            "Referer": "https://pan.quark.cn/",
-            "Content-Type": "application/json"
-        }
-        
-        fids_to_del = [r["file_fid"] for r in rows if r["file_fid"]]
-        if cookie and fids_to_del:
-            try:
-                # 批量删除文件
-                del_url = "https://drive-pc.quark.cn/1/clouddrive/file/delete?pr=ucpro&fr=pc"
-                requests.post(del_url, headers=headers, json={"filelist": fids_to_del}, timeout=6)
-            except Exception:
-                pass
-                
+        import juchang8_qu as QU
+        by_pan = {}
+        for r in rows:
+            if r["file_fid"]:
+                by_pan.setdefault((r["pan_type"] or "quark").lower(), []).append(r["file_fid"])
+        for pt, fids in by_pan.items():
+            if pt in ("quark", "uc"):
+                acc = conn.execute("SELECT cookie FROM pan_accounts WHERE pan_type=? AND status='active' ORDER BY id DESC LIMIT 1", (pt,)).fetchone()
+                if acc and acc["cookie"]:
+                    QU.delete_files(pt, acc["cookie"], fids)
+
         # 更新数据库状态
         for r in rows:
             conn.execute("UPDATE pan_transfers SET status='purged' WHERE id=?", (r["id"],))

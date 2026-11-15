@@ -108,7 +108,7 @@ def _conn():
     c = sqlite3.connect(DB_PATH, timeout=30, check_same_thread=False)
     c.row_factory = sqlite3.Row
     try:
-        c.execute("PRAGMA journal_mode=WAL")
+        c.execute("PRAGMA journal_mode=DELETE")  # 单文件挂载下 WAL 会把数据留在容器里，重建就丢
     except Exception:
         try:
             c.execute("PRAGMA journal_mode=DELETE")
