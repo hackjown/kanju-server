@@ -2757,6 +2757,10 @@
               clearInterval(panQrTimer);
               panQrTimer = null;
               msg.innerHTML = '<span style="color: var(--red);">二维码已失效，请重新点击扫码</span>';
+            } else if (pollData.status === 'error') {
+              clearInterval(panQrTimer);
+              panQrTimer = null;
+              msg.innerHTML = `<span style="color: var(--red);">${pollData.message || '登录确认后换取 Cookie 失败，请重新扫码'}</span>`;
             }
           } catch (e) {}
         }, 1800);

@@ -363,37 +363,127 @@ def check_qr_quark(session_row):
 # 3. 扫码登录流程：UC网盘 (drive.uc.cn / "us")
 # ==========================================================
 
+_UC_UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+_UC_CLIENT_ID = "381"
+
+
 def create_qr_uc():
-    """创建 UC 网盘扫码登录会话 (兼容手机端 UC 浏览器与 UC网盘 App)"""
-    session_id = f"qr_uc_{uuid.uuid4().hex[:12]}"
-    now = int(time.time())
-    expires_at = now + 300
-    
-    # UC 登录入口短链
-    uc_url = "https://drive.uc.cn/login?from=juchang8_clone"
-    qr_svg = _generate_qr_svg(uc_url)
-    
-    with _db() as conn:
-        conn.execute("""
-        INSERT INTO pan_qr_sessions (session_id, pan_type, qr_token, qr_url, qr_svg, qr_data, status, created_at, expires_at)
-        VALUES (?, 'uc', '', ?, ?, '{}', 'waiting', ?, ?)
-        """, (session_id, uc_url, qr_svg, now, expires_at))
-        conn.commit()
-        
-    return {
-        "ok": True,
-        "session_id": session_id,
-        "pan_type": "uc",
-        "qr_url": uc_url,
-        "qr_svg": qr_svg,
-        "expires_in": 300,
-        "tip": "请使用 UC浏览器 扫描二维码登录；亦可直接在下方粘贴 UC 网页端 Cookie 一键绑定"
-    }
+    """创建 UC 网盘官方扫码登录会话（阿里 UOP CAS，client_id=381，与夸克同源）"""
+    headers = {"User-Agent": _UC_UA, "Referer": "https://drive.uc.cn/"}
+    try:
+        r = requests.get("https://api.open.uc.cn/cas/ajax/getTokenForQrcodeLogin",
+                         params={"client_id": _UC_CLIENT_ID, "v": "1.2", "request_id": str(uuid.uuid4())},
+                         headers=headers, timeout=6)
+        res = r.json()
+        if res.get("status") != 2000000:
+            return {"ok": False, "error": res.get("message") or "获取 UC 登录凭证失败"}
+        token = (res.get("data") or {}).get("members", {}).get("token")
+        if not token:
+            return {"ok": False, "error": "未能提取 UC 二维码 Token"}
+        cas_cookies = "; ".join(f"{k}={v}" for k, v in r.cookies.get_dict().items())
+        qr_content = ("https://su.uc.cn/1_n0ZCv?uc_param_str=dsdnfrpfbivesscpgimibtbmnijblauputogpintnwktprchmt"
+                      f"&token={token}&client_id={_UC_CLIENT_ID}&uc_biz_str=S%3Acustom%7CC%3Atitlebar_fix")
+        qr_svg = _generate_qr_svg(qr_content)
+        session_id = f"qr_uc_{uuid.uuid4().hex[:12]}"
+        now = int(time.time())
+        expires_at = now + 120
+        with _db() as conn:
+            conn.execute("""
+            INSERT INTO pan_qr_sessions (session_id, pan_type, qr_token, qr_url, qr_svg, qr_data, status, created_at, expires_at)
+            VALUES (?, 'uc', ?, ?, ?, ?, 'waiting', ?, ?)
+            """, (session_id, token, qr_content, qr_svg, json.dumps({"token": token, "cookies": cas_cookies}), now, expires_at))
+            conn.commit()
+        return {
+            "ok": True,
+            "session_id": session_id,
+            "pan_type": "uc",
+            "qr_url": qr_content,
+            "qr_svg": qr_svg,
+            "expires_in": 120,
+            "tip": "请打开【UC浏览器 App】扫一扫（或 UC网盘 App），扫描后在手机上点【确认登录】"
+        }
+    except Exception as e:
+        return {"ok": False, "error": f"生成 UC 二维码失败: {e}"}
 
 
 def check_qr_uc(session_row):
-    """UC 网盘状态检查 (支持快捷手动绑定与会话状态同步)"""
-    return session_row["status"], session_row["result_cookie"], None
+    """轮询 UC 扫码状态：拿 service_ticket 到 drive.uc.cn/account/info 换取 __pus/__puus 等网页端 Cookie"""
+    # 手动粘贴 Cookie 绑定时 result_cookie 已有值，直接返回
+    try:
+        if session_row["result_cookie"]:
+            return session_row["status"], session_row["result_cookie"], None
+    except Exception:
+        pass
+    extra = json.loads(session_row["qr_data"] or "{}")
+    token = extra.get("token") or session_row["qr_token"]
+    if not token:
+        return "expired", None, None
+    headers = {"User-Agent": _UC_UA, "Referer": "https://drive.uc.cn/"}
+    if extra.get("cookies"):
+        headers["Cookie"] = extra["cookies"]
+    try:
+        r = requests.get("https://api.open.uc.cn/cas/ajax/getServiceTicketByQrcodeToken",
+                         params={"client_id": _UC_CLIENT_ID, "v": "1.2", "token": token, "request_id": str(uuid.uuid4())},
+                         headers=headers, timeout=5)
+        res = r.json()
+        st_code = res.get("status")
+        if st_code == 2000000:
+            st = (res.get("data") or {}).get("members", {}).get("service_ticket")
+            if not st:
+                return "scanned", None, None
+            sess = requests.Session()
+            sess.headers.update({"User-Agent": _UC_UA, "Referer": "https://drive.uc.cn/", "Origin": "https://drive.uc.cn"})
+            r_info = sess.get("https://drive.uc.cn/account/info",
+                              params={"st": st, "lw": "scan", "fr": "pc", "platform": "pc"}, timeout=8)
+            jar = sess.cookies.get_dict()
+            # 兜底：从 Set-Cookie 原始头补齐
+            raw = r_info.headers.get("Set-Cookie", "")
+            for name in ("__pus", "__puus", "__kp", "__kps", "__ktd", "__uid"):
+                if name not in jar:
+                    m = re.search(re.escape(name) + r"=([^;]+)", raw)
+                    if m:
+                        jar[name] = m.group(1)
+            if "__pus" not in jar and "__puus" not in jar:
+                print(f"[KanjuPan] UC 扫码已确认但未拿到 __pus: http={r_info.status_code} body={r_info.text[:200]}")
+                return "error", None, None
+            cookie_str = "; ".join(f"{k}={v}" for k, v in jar.items())
+            info = {}
+            try:
+                info = r_info.json().get("data") or {}
+            except Exception:
+                pass
+            # 再用 pc-api 校验一次 Cookie 是否可用
+            try:
+                rv = requests.get("https://pc-api.uc.cn/1/clouddrive/member",
+                                  params={"pr": "UCBrowser", "fr": "pc", "fetch_subscribe": "true"},
+                                  headers={"User-Agent": _UC_UA, "Referer": "https://drive.uc.cn/", "Cookie": cookie_str}, timeout=6)
+                mj = rv.json()
+                if mj.get("status") == 200 or mj.get("code") == 0:
+                    md = mj.get("data") or {}
+                    info.setdefault("member_type", md.get("member_type"))
+                # 带回服务端续期的 Cookie
+                for k, v in rv.cookies.get_dict().items():
+                    jar[k] = v
+                cookie_str = "; ".join(f"{k}={v}" for k, v in jar.items())
+            except Exception:
+                pass
+            mt = str(info.get("member_type") or "").upper()
+            user_info = {
+                "uid": str(info.get("uid") or info.get("id") or ""),
+                "user_name": info.get("nickname") or info.get("user_name") or "UC用户",
+                "vip_type": "SVIP" if ("SVIP" in mt or "VIP" in mt or info.get("is_vip")) else "普通用户",
+            }
+            return "confirmed", cookie_str, user_info
+        elif st_code in (50004001, 2000010, 2000011):
+            return "waiting", None, None
+        elif st_code in (2000012, 50004003):
+            return "scanned", None, None
+        elif st_code in (2000014, 50004002, 50004004):
+            return "expired", None, None
+        return "waiting", None, None
+    except Exception as e:
+        print(f"[KanjuPan] UC 扫码轮询异常: {e}")
+        return "waiting", None, None
 
 
 # ==========================================================
@@ -474,7 +564,10 @@ def get_qr_session_status(session_id):
         return {
             "ok": True,
             "status": status,
-            "message": "已扫码，请在手机端点击【确认登录】" if status == "scanned" else "等待手机扫码中..."
+            "message": ("已扫码，请在手机端点击【确认登录】" if status == "scanned"
+                        else "已确认但未换到 Cookie，请刷新二维码重扫（服务器日志有 [KanjuPan] 详情）" if status == "error"
+                        else "二维码已失效，请刷新重新获取" if status == "expired"
+                        else "等待手机扫码中...")
         }
 
 
