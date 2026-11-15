@@ -285,6 +285,8 @@
     let streamUrl = rawUrl ? (rawUrl.startsWith('http') ? rawUrl : new URL(rawUrl, window.location.href).href) : '';
     let movieTitle = urlParams.get('title') || '车载影院';
     let epTitle = urlParams.get('ep') || '正片';
+    let startParam = parseFloat(urlParams.get('start') || '0');
+    let hasSeekedToStart = false;
 
     const dispTitle = document.getElementById('disp-title');
     const dispSubtitle = document.getElementById('disp-subtitle');
@@ -447,6 +449,26 @@
           hasReceivedFirstTime = true;
           clearWatchdog();
           spinnerWrap.style.display = 'none';
+
+          // 自动断点续播跳转
+          if (!hasSeekedToStart && startParam > 5) {
+            hasSeekedToStart = true;
+            try {
+              console.log('[Player] 自动续播跳转至:', startParam, '秒');
+              if (typeof player.seek === 'function') {
+                player.seek(BigInt(Math.floor(startParam * 1000)));
+              } else if (player.currentTime !== undefined) {
+                player.currentTime = startParam;
+              }
+              notifyParent({
+                type: 'RESUME_TOAST',
+                pos: startParam
+              });
+            } catch (e) {
+              console.warn('[Player] 自动续播跳转异常:', e);
+            }
+          }
+
           notifyParent({
             type: 'TIME_UPDATE',
             currentTime: (Number(timeMs) || 0) / 1000,
@@ -574,6 +596,8 @@
       if (data.type === 'LOAD_URL') {
         if (data.title) dispTitle.innerText = decodeURIComponent(data.title);
         if (data.epTitle) dispSubtitle.innerText = decodeURIComponent(data.epTitle) + ' · 1080P 芯片硬解 (Canvas)';
+        startParam = parseFloat(data.start) || 0;
+        hasSeekedToStart = false;
         if (data.url) {
           loadStream(data.url);
         }

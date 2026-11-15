@@ -667,9 +667,21 @@
       <div class="quick-tag" data-kind="rank" onclick="selectCategory('rank', this)">🏆 热播榜</div>
     </div>
 
+    <!-- 观看历史与继续播放专区 -->
+    <div id="history-section" style="display: none; margin-bottom: 30px;">
+      <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
+        <div class="shelf-title" style="margin-bottom: 0;">⏱ 最近观看 · 接着看</div>
+        <button class="btn-car" onclick="clearWatchHistory()" style="font-size: 13px; padding: 6px 14px; background: rgba(255,255,255,0.06); border: 1px solid rgba(255,255,255,0.15); color: var(--text-muted); border-radius: 8px;">清空历史</button>
+      </div>
+      <div class="car-card-grid" id="history-grid"></div>
+    </div>
+
     <!-- 搜索结果区（若有） -->
     <div id="search-results-section" style="display: none; margin-bottom: 30px;">
-      <div class="shelf-title">🔍 搜索结果</div>
+      <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
+        <div class="shelf-title" id="search-title" style="margin-bottom: 0;">🔍 搜索结果</div>
+        <button class="btn-car" onclick="clearSearch()" style="font-size: 13px; padding: 6px 14px; background: rgba(255,255,255,0.06); border: 1px solid rgba(255,255,255,0.15); color: var(--text-muted); border-radius: 8px;">❌ 清空搜索 / 返回片库</button>
+      </div>
       <div class="car-card-grid" id="search-grid"></div>
     </div>
 
@@ -677,6 +689,9 @@
     <div id="category-results-section" style="display: none; margin-bottom: 30px;">
       <div class="shelf-title" id="category-title">🎬 电影</div>
       <div class="car-card-grid" id="category-grid"></div>
+      <div id="category-load-more-wrap" style="text-align: center; margin-top: 28px; display: none;">
+        <button id="btn-cat-load-more" class="btn-car primary" onclick="loadMoreCategory()" style="padding: 12px 36px; font-size: 16px; border-radius: 24px;">加载更多精彩影片 ⬇</button>
+      </div>
     </div>
 
     <!-- 默认精选多栏目流（选择“全部精选”时展示） -->
@@ -2037,10 +2052,15 @@
     }
 
     let activePlayId = 0;
+    let currentResumePos = 0;
+
     // 核心播放入口：Tesla-Netflix 方案 (iframe 沙箱隔离 + visibilitychange 防黑屏 + WebAudio 音频直连 + 原生 GPU 硬件直解)
-    async function playMediaSource(url) {
+    async function playMediaSource(url, resumePos = null) {
       const playId = ++activePlayId;
       currentStreamUrl = url;
+      if (resumePos !== null && resumePos !== undefined) {
+        currentResumePos = resumePos;
+      }
 
       // 停止旧推流/旧看门狗与定时器
       if (videoAbortCtrl) { videoAbortCtrl.abort(); videoAbortCtrl = null; }
@@ -2069,19 +2089,22 @@
 
       const iframe = document.getElementById('car-player-frame');
       if (iframe) {
-        const frameSrc = `/car/player_frame?url=${encodeURIComponent(cleanUrl)}&title=${encodeURIComponent(movieTitle)}&ep=${encodeURIComponent(epTitle)}`;
+        const frameSrc = `/car/player_frame?url=${encodeURIComponent(cleanUrl)}&title=${encodeURIComponent(movieTitle)}&ep=${encodeURIComponent(epTitle)}&start=${Math.floor(currentResumePos || 0)}`;
         if (iframe.contentWindow && iframe.getAttribute('data-loaded') === 'true') {
           try {
             iframe.contentWindow.postMessage({
               type: 'LOAD_URL',
               url: cleanUrl,
               title: movieTitle,
-              epTitle: epTitle
+              epTitle: epTitle,
+              start: Math.floor(currentResumePos || 0)
             }, '*');
+            currentResumePos = 0;
             return;
           } catch (_) {}
         }
         iframe.src = frameSrc;
+        currentResumePos = 0;
       }
     }
 
@@ -2094,6 +2117,16 @@
           console.log('[Host] 播放器 iframe 已就绪');
           const ifr = document.getElementById('car-player-frame');
           if (ifr) ifr.setAttribute('data-loaded', 'true');
+          break;
+        case 'TIME_UPDATE':
+          if (data.currentTime && data.currentTime > 2) {
+            updateWatchHistoryProgress(currentCid, currentEpIndex, data.currentTime, data.duration);
+          }
+          break;
+        case 'RESUME_TOAST':
+          if (data.pos && data.pos > 5) {
+            showGestureHud('⏱', '已自动续播至 ' + formatDuration(data.pos), 2.2);
+          }
           break;
         case 'REQUEST_PREV':
           prevEpisode();
@@ -2398,8 +2431,23 @@
     // ========================================================
     // 7. 影片详情与 4 级线路加载体系
     // ========================================================
-    async function loadMovieAndPlay(cid, epIdx = 0) {
+    async function loadMovieAndPlay(cid, epIdx = 0, resumePos = null) {
       currentCid = cid;
+      
+      // 若未显式传入进度，尝试自动读取最近播放历史以支持断点续播
+      if (resumePos === null) {
+        const hist = getWatchHistory();
+        const existing = hist.find(h => h.cid === cid);
+        if (existing && existing.position > 10) {
+          if (epIdx === 0 && existing.epIndex !== undefined) {
+            epIdx = existing.epIndex;
+          }
+          resumePos = existing.position;
+        } else {
+          resumePos = 0;
+        }
+      }
+      currentResumePos = resumePos || 0;
       currentEpIndex = epIdx;
 
       const carHeader = document.getElementById('car-header');
@@ -2431,6 +2479,7 @@
             btn.innerText = ep.title || `第 ${idx + 1} 集`;
             btn.onclick = () => {
               closeDrawer('drawer-eps');
+              currentResumePos = 0; // 手动切集从头播放
               loadEpisode(idx);
             };
             epsBody.appendChild(btn);
@@ -2450,6 +2499,17 @@
       const ep = eps[epIdx] || { token: currentCid, title: '正片' };
       const epEl = document.getElementById('disp-ep-title');
       if (epEl) epEl.innerText = ep.title || `第 ${epIdx + 1} 集`;
+
+      // 记录历史播放卡片元信息
+      saveWatchHistoryItem({
+        cid: currentCid,
+        title: (currentDetail && currentDetail.title) || '车载影视',
+        poster: (currentDetail && (currentDetail.poster_url || currentDetail.poster || currentDetail.backdrop_url)) || '',
+        epIndex: epIdx,
+        epTitle: ep.title || `第 ${epIdx + 1} 集`,
+        position: currentResumePos || 0,
+        duration: 0
+      });
 
       // 请求车机专属线路：完全排除网盘 4K，聚合 Kanju 4K + 本地 4K 蓝光 + 1080P 高清
       loadPlayLines(ep.token, (currentDetail && currentDetail.title) || '', epIdx + 1);
@@ -2706,11 +2766,138 @@
       if (carHeader) carHeader.style.display = 'flex';
       document.getElementById('home-view').style.display = 'block';
       document.body.style.overflow = '';
+      renderWatchHistory();
       closeDrawer('drawer-lines');
       closeDrawer('drawer-eps');
       closeDrawer('drawer-audio');
       closeDrawer('drawer-color');
       closeDrawer('drawer-engine');
+    }
+
+    // ========================================================
+    // 7.5 观看历史与断点续播管理体系 (Tesla 车机专属)
+    // ========================================================
+    const HISTORY_KEY = 'CAR_WATCH_HISTORY';
+
+    function getWatchHistory() {
+      try {
+        const raw = localStorage.getItem(HISTORY_KEY);
+        return raw ? JSON.parse(raw) : [];
+      } catch (_) {
+        return [];
+      }
+    }
+
+    function saveWatchHistoryItem(item) {
+      if (!item || !item.cid) return;
+      try {
+        let hist = getWatchHistory();
+        hist = hist.filter(h => h.cid !== item.cid);
+        hist.unshift({
+          ...item,
+          updatedAt: Date.now()
+        });
+        if (hist.length > 30) hist = hist.slice(0, 30);
+        localStorage.setItem(HISTORY_KEY, JSON.stringify(hist));
+      } catch (_) {}
+    }
+
+    let lastSaveHistoryTime = 0;
+    function updateWatchHistoryProgress(cid, epIdx, pos, dur) {
+      if (!cid) return;
+      const now = Date.now();
+      if (now - lastSaveHistoryTime < 3000) return; // 3秒节流
+      lastSaveHistoryTime = now;
+      try {
+        let hist = getWatchHistory();
+        const item = hist.find(h => h.cid === cid);
+        if (item) {
+          item.epIndex = epIdx;
+          item.position = Math.floor(pos);
+          if (dur > 0) item.duration = Math.floor(dur);
+          item.updatedAt = now;
+          localStorage.setItem(HISTORY_KEY, JSON.stringify(hist));
+        }
+      } catch (_) {}
+    }
+
+    function clearWatchHistory() {
+      try {
+        localStorage.removeItem(HISTORY_KEY);
+        renderWatchHistory();
+      } catch (_) {}
+    }
+
+    function formatDuration(sec) {
+      sec = Math.floor(Number(sec) || 0);
+      const m = Math.floor(sec / 60);
+      const s = sec % 60;
+      const h = Math.floor(m / 60);
+      if (h > 0) {
+        const remM = m % 60;
+        return `${h}:${remM < 10 ? '0' : ''}${remM}:${s < 10 ? '0' : ''}${s}`;
+      }
+      return `${m}:${s < 10 ? '0' : ''}${s}`;
+    }
+
+    function createHistoryCard(item) {
+      const card = document.createElement('div');
+      card.className = 'car-card history-card';
+      const posterUrl = item.poster || item.poster_url || '';
+      const fallbackSrc = createSvgFallback(item.title);
+      const percent = (item.duration > 0 && item.position > 0) ? Math.min(100, Math.round((item.position / item.duration) * 100)) : 0;
+      const timeText = formatDuration(item.position);
+      const epText = item.epTitle || `第 ${(item.epIndex || 0) + 1} 集`;
+
+      card.innerHTML = `
+        <div style="position: relative; width: 100%; aspect-ratio: 2/3; overflow: hidden; background: #27272a;">
+          <img src="${posterUrl}" referrerpolicy="no-referrer" loading="lazy" alt="${item.title || ''}" style="width: 100%; height: 100%; object-fit: cover; display: block;"/>
+          <div style="position: absolute; top: 8px; right: 8px; background: rgba(0, 229, 255, 0.9); color: #000; font-weight: 800; font-size: 12px; padding: 3px 8px; border-radius: 6px; box-shadow: 0 2px 6px rgba(0,0,0,0.5);">
+            ▶ 接着看
+          </div>
+          <div style="position: absolute; bottom: 0; left: 0; right: 0; padding: 10px 8px 6px 8px; background: linear-gradient(180deg, transparent 0%, rgba(0,0,0,0.88) 100%);">
+            <div style="color: #fff; font-size: 13px; font-weight: 700; text-shadow: 0 1px 2px rgba(0,0,0,0.8);">${epText} · ${timeText}</div>
+            <div style="width: 100%; height: 5px; background: rgba(255,255,255,0.25); border-radius: 3px; margin-top: 5px; overflow: hidden;">
+              <div style="width: ${percent}%; height: 100%; background: var(--accent-cyan); border-radius: 3px;"></div>
+            </div>
+          </div>
+        </div>
+        <div class="card-info">
+          <div class="card-t">${item.title}</div>
+          <div class="card-s">
+            <span>上次看到 ${percent}%</span>
+            <span style="color: var(--accent-cyan); font-weight: 700;">点击续播</span>
+          </div>
+        </div>
+      `;
+
+      const img = card.querySelector('img');
+      img.onerror = function() {
+        this.onerror = null;
+        this.src = fallbackSrc;
+      };
+
+      card.onclick = () => {
+        loadMovieAndPlay(item.cid, item.epIndex || 0, item.position || 0);
+      };
+      return card;
+    }
+
+    function renderWatchHistory() {
+      const hist = getWatchHistory();
+      const sec = document.getElementById('history-section');
+      const grid = document.getElementById('history-grid');
+      if (!sec || !grid) return;
+      if (!hist || hist.length === 0) {
+        sec.style.display = 'none';
+        grid.innerHTML = '';
+        return;
+      }
+      sec.style.display = 'block';
+      grid.innerHTML = '';
+      hist.slice(0, 12).forEach(item => {
+        grid.appendChild(createHistoryCard(item));
+      });
     }
 
     // ========================================================
@@ -2793,11 +2980,11 @@
           if (popGrid) {
             popGrid.innerHTML = '';
             const cards = sections[0].cards || [];
-            cards.slice(0, 18).forEach(item => {
+            cards.forEach(item => {
               if (!isJunkOrSport(item)) popGrid.appendChild(createCarCard(item));
             });
             if (popGrid.children.length === 0 && cards.length > 0) {
-              cards.slice(0, 18).forEach(item => popGrid.appendChild(createCarCard(item)));
+              cards.forEach(item => popGrid.appendChild(createCarCard(item)));
             }
           }
         }
@@ -2812,11 +2999,11 @@
         const movieGrid = document.getElementById('movie-grid');
         if (movieGrid && movieCards.length > 0) {
           movieGrid.innerHTML = '';
-          movieCards.slice(0, 24).forEach(item => {
+          movieCards.forEach(item => {
             if (!isJunkOrSport(item)) movieGrid.appendChild(createCarCard(item));
           });
           if (movieGrid.children.length === 0) {
-            movieCards.slice(0, 24).forEach(item => movieGrid.appendChild(createCarCard(item)));
+            movieCards.forEach(item => movieGrid.appendChild(createCarCard(item)));
           }
         }
 
@@ -2830,11 +3017,11 @@
         const dramaGrid = document.getElementById('drama-grid');
         if (dramaGrid && dramaCards.length > 0) {
           dramaGrid.innerHTML = '';
-          dramaCards.slice(0, 24).forEach(item => {
+          dramaCards.forEach(item => {
             if (!isJunkOrSport(item)) dramaGrid.appendChild(createCarCard(item));
           });
           if (dramaGrid.children.length === 0) {
-            dramaCards.slice(0, 24).forEach(item => dramaGrid.appendChild(createCarCard(item)));
+            dramaCards.forEach(item => dramaGrid.appendChild(createCarCard(item)));
           }
         }
 
@@ -2848,11 +3035,11 @@
         const animeGrid = document.getElementById('anime-grid');
         if (animeGrid && animeCards.length > 0) {
           animeGrid.innerHTML = '';
-          animeCards.slice(0, 24).forEach(item => {
+          animeCards.forEach(item => {
             if (!isJunkOrSport(item)) animeGrid.appendChild(createCarCard(item));
           });
           if (animeGrid.children.length === 0) {
-            animeCards.slice(0, 24).forEach(item => animeGrid.appendChild(createCarCard(item)));
+            animeCards.forEach(item => animeGrid.appendChild(createCarCard(item)));
           }
         }
       } catch (e) {
@@ -2872,7 +3059,7 @@
           hotGrid.innerHTML = '';
           const validRankItems = rankData.items.filter(item => !isJunkOrSport(item));
           const itemsToRender = validRankItems.length > 0 ? validRankItems : rankData.items;
-          itemsToRender.slice(0, 24).forEach(item => {
+          itemsToRender.forEach(item => {
             hotGrid.appendChild(createCarCard(item));
           });
         }
@@ -2896,9 +3083,16 @@
     };
 
     let currentCategoryKind = 'all';
+    let currentCategoryPage = 1;
+    let categoryHasMore = false;
+    let categoryLoading = false;
 
     async function selectCategory(kind, el) {
       currentCategoryKind = kind;
+      currentCategoryPage = 1;
+      categoryHasMore = false;
+      categoryLoading = false;
+
       const pills = document.querySelectorAll('#category-bar .quick-tag');
       pills.forEach(p => p.classList.remove('active'));
       if (el) el.classList.add('active');
@@ -2910,13 +3104,16 @@
       const catGrid = document.getElementById('category-grid');
       const catTitle = document.getElementById('category-title');
       const homeShelves = document.getElementById('home-shelves-wrap');
+      const histSec = document.getElementById('history-section');
 
       if (kind === 'all') {
         if (catSec) catSec.style.display = 'none';
         if (homeShelves) homeShelves.style.display = 'block';
+        renderWatchHistory();
         return;
       }
 
+      if (histSec) histSec.style.display = 'none';
       if (homeShelves) homeShelves.style.display = 'none';
       if (catSec) catSec.style.display = 'block';
       if (catTitle) catTitle.innerHTML = categoryTitles[kind] || '🔍 分类影片';
@@ -2924,34 +3121,86 @@
         catGrid.innerHTML = '<div style="color: var(--accent-cyan); font-size: 18px; padding: 20px;">正在连接片库...</div>';
       }
 
+      await fetchCategoryPage(kind, 1, false);
+    }
+
+    async function fetchCategoryPage(kind, page, append = false) {
+      if (categoryLoading) return;
+      categoryLoading = true;
+      const loadMoreBtn = document.getElementById('btn-cat-load-more');
+      const loadMoreWrap = document.getElementById('category-load-more-wrap');
+      if (loadMoreBtn && append) loadMoreBtn.innerText = '正在加载更多影片...';
+
       try {
         let items = [];
+        let hasMore = false;
         if (kind === 'rank') {
           const res = await fetch('/api/rank');
           const d = await res.json();
           items = (d.items || []).filter(item => !isJunkOrSport(item));
+          hasMore = false;
         } else {
-          const res = await fetch(`/api/browse?kind=${encodeURIComponent(kind)}&limit=48&sort=heat_desc`);
+          const res = await fetch(`/api/browse?kind=${encodeURIComponent(kind)}&page=${page}&limit=48&sort=heat_desc`);
           const d = await res.json();
           items = (d.items || d.cards || []).filter(item => !isJunkOrSport(item));
+          hasMore = Boolean(d.has_more);
         }
 
-        if (!items.length) {
+        const catGrid = document.getElementById('category-grid');
+        if (!append && catGrid) {
+          catGrid.innerHTML = '';
+        }
+
+        if (!items.length && !append) {
           if (catGrid) catGrid.innerHTML = '<div style="color: var(--text-muted); padding: 20px;">该分类暂无更多片源</div>';
+          if (loadMoreWrap) loadMoreWrap.style.display = 'none';
           return;
         }
 
         if (catGrid) {
-          catGrid.innerHTML = '';
           items.forEach(item => {
             catGrid.appendChild(createCarCard(item));
           });
         }
+
+        categoryHasMore = hasMore;
+        currentCategoryPage = page;
+
+        if (loadMoreWrap) {
+          if (hasMore) {
+            loadMoreWrap.style.display = 'block';
+            if (loadMoreBtn) {
+              loadMoreBtn.innerText = '加载更多精彩影片 ⬇';
+              loadMoreBtn.classList.add('primary');
+            }
+          } else {
+            if (catGrid && catGrid.children.length > 20) {
+              loadMoreWrap.style.display = 'block';
+              if (loadMoreBtn) {
+                loadMoreBtn.innerText = '✓ 已加载该分类全部影片';
+                loadMoreBtn.classList.remove('primary');
+              }
+            } else {
+              loadMoreWrap.style.display = 'none';
+            }
+          }
+        }
       } catch (err) {
         console.warn('[Category] load error:', err);
-        if (catGrid) {
-          catGrid.innerHTML = `<div style="color: var(--accent-red); padding: 20px; cursor: pointer;" onclick="selectCategory('${kind}', null)">加载失败，点击重试</div>`;
+        if (!append) {
+          const catGrid = document.getElementById('category-grid');
+          if (catGrid) {
+            catGrid.innerHTML = `<div style="color: var(--accent-red); padding: 20px; cursor: pointer;" onclick="selectCategory('${kind}', null)">加载失败，点击重试</div>`;
+          }
         }
+      } finally {
+        categoryLoading = false;
+      }
+    }
+
+    function loadMoreCategory() {
+      if (categoryHasMore && !categoryLoading) {
+        fetchCategoryPage(currentCategoryKind, currentCategoryPage + 1, true);
       }
     }
 
@@ -2965,13 +3214,18 @@
       const catSec = document.getElementById('category-results-section');
       if (catSec) catSec.style.display = 'none';
 
+      const histSec = document.getElementById('history-section');
+      if (histSec) histSec.style.display = 'none';
+
       const homeShelves = document.getElementById('home-shelves-wrap');
       if (homeShelves) homeShelves.style.display = 'none';
 
       const sec = document.getElementById('search-results-section');
       const grid = document.getElementById('search-grid');
+      const title = document.getElementById('search-title');
+      if (title) title.innerText = `🔍 搜索结果：【${q}】`;
       sec.style.display = 'block';
-      grid.innerHTML = '<div style="color: var(--accent-cyan); font-size: 18px; padding: 20px;">正在检索 4K 影片库...</div>';
+      grid.innerHTML = '<div style="color: var(--accent-cyan); font-size: 18px; padding: 20px;">正在检索 4K 影片库与极速专线...</div>';
       grid.scrollIntoView({ behavior: 'smooth' });
 
       try {
@@ -2979,7 +3233,7 @@
         const d = await res.json();
         const items = d.results || d.items || [];
         if (!items.length) {
-          grid.innerHTML = `<div style="color: var(--text-muted); padding: 20px;">未检索到【${q}】相关的 4K 影片</div>`;
+          grid.innerHTML = `<div style="color: var(--text-muted); padding: 20px; font-size: 16px;">未检索到【${q}】相关的 4K 影片，建议检查片名或更换关键词</div>`;
           return;
         }
 
@@ -2989,6 +3243,26 @@
         });
       } catch (e) {
         grid.innerHTML = '<div style="color: var(--accent-red); padding: 20px;">检索异常，请重试</div>';
+      }
+    }
+
+    function clearSearch() {
+      const input = document.getElementById('car-search-input');
+      if (input) input.value = '';
+      const sec = document.getElementById('search-results-section');
+      if (sec) sec.style.display = 'none';
+
+      if (currentCategoryKind === 'all') {
+        const homeShelves = document.getElementById('home-shelves-wrap');
+        if (homeShelves) homeShelves.style.display = 'block';
+        renderWatchHistory();
+        const allPill = document.querySelector('#category-bar .quick-tag[data-kind="all"]');
+        if (allPill) allPill.classList.add('active');
+      } else {
+        const catSec = document.getElementById('category-results-section');
+        if (catSec) catSec.style.display = 'block';
+        const actPill = document.querySelector(`#category-bar .quick-tag[data-kind="${currentCategoryKind}"]`);
+        if (actPill) actPill.classList.add('active');
       }
     }
 
@@ -3055,6 +3329,9 @@
       } catch (e) {
         console.warn('initCanvasRenderer failed:', e);
       }
+      try {
+        renderWatchHistory();
+      } catch (_) {}
       try {
         loadHomeContent();
       } catch (e) {

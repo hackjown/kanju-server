@@ -4,10 +4,15 @@
 复现前端硬编码 HMAC 签名，代理上游 /v1/catalog、/v1/feed/home、/v1/playback/episodes，
 并把 resolve:// 票据与 m3u8 直链解析出来给前端播放。
 """
-import os, json, time, hmac, hashlib, secrets, threading, re, urllib.parse, functools, subprocess, struct, shutil
+import os, json, time, hmac, hashlib, secrets, threading, re, urllib.parse, functools, subprocess, struct, shutil, concurrent.futures
 
 import requests
 from flask import Flask, jsonify, request, send_from_directory, Response, make_response
+import juchang8_collector as KC
+
+_COLLECTOR_ITEM_CACHE = {}   # {col_cid: item_dict}
+_EP_TOKEN_MAP = {}           # {token: {"url": str, "title": str, "ep_num": int, "is_4k": bool}}
+_CID_TO_TITLE = {}           # {cid: title}
 
 KEY = "557d0e4ae929f438da6bd84412374e6086b8af09b3fed54bf22601d5bf8c54a0"
 BASES = ["https://kanju26.com", "https://kanju1.ai", "https://kanju13.com"]
@@ -318,7 +323,7 @@ def hls():
 # ---------------- 接口 ----------------
 @app.route("/api/home")
 def api_home():
-    d, err = api_get("/v1/feed/home?scope=public&mode=preview&cards=18",
+    d, err = api_get("/v1/feed/home?scope=public&mode=preview&cards=48",
                      cache_key="home", ttl=300)
     if err:
         return jsonify({"ok": False, "error": err}), 502
@@ -339,38 +344,187 @@ def api_home():
 
 @app.route("/api/search")
 def api_search():
-    """KANJU_SEARCH_FIX: 用上游 query= 参数，标签取 suggestions[].label / target.variant_id"""
+    """KANJU_SEARCH_FIX: 用上游 q= 参数 (非 query=) 结合本地多源采集引擎聚合搜索"""
     q = (request.args.get("q") or request.args.get("query") or "").strip()
     if not q:
-        return jsonify({"ok": False, "error": "缺少关键词"}), 400
-    path = "/v1/suggest?query=" + urllib.parse.quote(q) + "&limit=20&scope=public"
-    d, err = api_get(path, cache_key="search_" + hashlib.md5(q.encode()).hexdigest(), ttl=900)
-    if err:
-        return jsonify({"ok": False, "error": err}), 502
-    raw = d.get("items") or d.get("results") or d.get("suggestions") or []
+        return jsonify({"ok": False, "error": "缺少关键词", "items": [], "results": []}), 400
+
+    path = "/v1/suggest?q=" + urllib.parse.quote(q) + "&limit=30&scope=public"
+    cache_key = "search_up_" + hashlib.md5(q.encode()).hexdigest()
+
+    # 并发检索：上游 suggest + 本地采集库多源搜索
+    upstream_data = None
+    col_items = []
+    with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
+        f_up = executor.submit(api_get, path, cache_key=cache_key, ttl=600)
+        f_col = executor.submit(KC.search_all_sources, q, timeout=3.5)
+        try:
+            d, err = f_up.result()
+            if not err and isinstance(d, dict):
+                upstream_data = d
+        except Exception:
+            pass
+        try:
+            col_items = f_col.result() or []
+        except Exception:
+            pass
+
     items = []
-    for it in raw:
+    seen_titles = set()
+
+    # 1. 优先提取上游精选结果
+    raw_sug = (upstream_data.get("suggestions") or upstream_data.get("items") or []) if upstream_data else []
+    
+    # 针对上游 top 4 结果并发预热拉取海报
+    cids_to_fetch_poster = []
+    for it in raw_sug[:4]:
+        if isinstance(it, dict):
+            tgt = it.get("target") or {}
+            c_id = tgt.get("variant_id") or it.get("catalog_id") or it.get("id")
+            if c_id and c_id.startswith("av_") and not it.get("poster_url"):
+                cids_to_fetch_poster.append(c_id)
+
+    poster_map = {}
+    if cids_to_fetch_poster:
+        def _get_p(c_id):
+            dt, _ = api_get("/v1/catalog/" + c_id, cache_key="detail_" + c_id[:32], ttl=3600)
+            if dt and isinstance(dt, dict):
+                return c_id, dt.get("poster_url")
+            return c_id, None
+        try:
+            with concurrent.futures.ThreadPoolExecutor(max_workers=len(cids_to_fetch_poster)) as ex:
+                poster_map = dict(ex.map(_get_p, cids_to_fetch_poster))
+        except Exception:
+            pass
+
+    for it in raw_sug:
         if not isinstance(it, dict):
             continue
         tgt = it.get("target") or {}
         title = it.get("label") or it.get("title") or it.get("prompt")
+        if not title:
+            continue
+        norm_t = re.sub(r"\s+", "", title).lower()
+        if norm_t in seen_titles:
+            continue
+        seen_titles.add(norm_t)
+
         cid = tgt.get("variant_id") or it.get("catalog_id") or it.get("id")
         sub = it.get("subtitle") or ""
         year = None
         m = re.match(r"(\d{4})", sub)
         if m:
             year = int(m.group(1))
-        items.append({"id": cid, "cid": cid, "title": title,
-                      "label": title, "subtitle": sub, "year": year,
-                      "poster": it.get("poster_url"),
-                      "kind": (it.get("plan") or {}).get("kind"),
-                      "remarks": sub,
-                      "playable": tgt.get("direct_playable")})
-    return jsonify({"ok": True, "q": q, "items": items, "count": len(items)})
+
+        poster = it.get("poster_url") or poster_map.get(cid)
+        items.append({
+            "id": cid,
+            "cid": cid,
+            "title": title,
+            "label": title,
+            "subtitle": sub,
+            "year": year,
+            "poster": poster,
+            "poster_url": poster,
+            "kind": (it.get("plan") or {}).get("kind") or "movie",
+            "remarks": sub or "4K蓝光",
+            "playable": bool(tgt.get("direct_playable", True)),
+            "is_4k": True
+        })
+
+    # 2. 融入本地采集源优质 4K / 蓝光片源
+    for c in col_items:
+        v_name = c.get("vod_name")
+        if not v_name:
+            continue
+        norm_t = re.sub(r"\s+", "", v_name).lower()
+        if norm_t in seen_titles:
+            continue
+        seen_titles.add(norm_t)
+
+        col_cid = f"col_{c.get('source_key') or 'src'}_{hashlib.md5(v_name.encode()).hexdigest()[:12]}"
+        _COLLECTOR_ITEM_CACHE[col_cid] = c
+
+        rem = c.get("vod_remarks") or ""
+        is_series = ("第" in rem or "集" in rem or "更新" in rem or "全" in rem)
+        items.append({
+            "id": col_cid,
+            "cid": col_cid,
+            "title": v_name,
+            "label": v_name,
+            "subtitle": rem or "4K极速专线",
+            "year": c.get("vod_year"),
+            "poster": c.get("vod_pic"),
+            "poster_url": c.get("vod_pic"),
+            "kind": "series" if is_series else "movie",
+            "remarks": rem or "4K蓝光",
+            "playable": True,
+            "is_4k": True
+        })
+
+    return jsonify({"ok": True, "q": q, "items": items, "results": items, "count": len(items)})
 
 
 @app.route("/api/detail/<cid>")
 def api_detail(cid):
+    if cid.startswith("col_"):
+        item = _COLLECTOR_ITEM_CACHE.get(cid)
+        if item:
+            sources = item.get("sources", [])
+            best_src = max(sources, key=lambda s: len((s.get("play_lines") or [{}])[0].get("episodes", [])), default={})
+            play_lines = best_src.get("play_lines") or []
+            src_episodes = play_lines[0].get("episodes", []) if play_lines else []
+            
+            episodes = []
+            for idx, ep in enumerate(src_episodes):
+                ep_token = f"col_tok_{cid}_{idx}"
+                ep_url = ep.get("url", "")
+                _EP_TOKEN_MAP[ep_token] = {
+                    "url": ep_url,
+                    "title": item.get("vod_name"),
+                    "ep_name": ep.get("title") or f"第 {idx + 1} 集",
+                    "ep_num": idx + 1,
+                    "is_4k": item.get("has_4k", False)
+                }
+                episodes.append({
+                    "id": ep_token,
+                    "title": ep.get("title") or f"第 {idx + 1} 集",
+                    "key": ep_token,
+                    "number": idx + 1,
+                    "index": idx + 1,
+                    "token": ep_token
+                })
+
+            if not episodes:
+                ep_token = f"col_tok_{cid}_0"
+                episodes.append({
+                    "id": ep_token,
+                    "title": "正片 4K",
+                    "key": ep_token,
+                    "number": 1,
+                    "index": 1,
+                    "token": ep_token
+                })
+
+            return jsonify({
+                "ok": True,
+                "id": cid,
+                "title": item.get("vod_name"),
+                "year": item.get("vod_year"),
+                "area": item.get("vod_area"),
+                "genres": [item.get("type_name")] if item.get("type_name") else [],
+                "actors": item.get("vod_actor"),
+                "directors": item.get("vod_director"),
+                "poster": item.get("vod_pic"),
+                "backdrop": item.get("vod_pic"),
+                "description": item.get("vod_content") or "4K 极速蓝光直解影院",
+                "remarks": item.get("vod_remarks"),
+                "progress": f"共 {len(episodes)} 集",
+                "episode_count": len(episodes),
+                "episodes": episodes,
+                "groups": ["4K 极速蓝光专线"]
+            })
+
     d, err = api_get("/v1/catalog/" + cid, cache_key="detail_" + cid[:32],
                      ttl=3600)
     if err:
@@ -482,6 +636,30 @@ def api_car_play(token):
         ep_num = int(request.args.get("ep") or "1")
     except Exception:
         ep_num = 1
+
+    # 0. 优先判断本地多源采集引擎直链 (col_tok_...) 或 _EP_TOKEN_MAP 缓存直链
+    if token.startswith("col_tok_") or (token in _EP_TOKEN_MAP and _EP_TOKEN_MAP[token].get("url")):
+        ep_info = _EP_TOKEN_MAP.get(token) or {}
+        col_url = ep_info.get("url") or ""
+        if col_url:
+            if (col_url.endswith("/play") or "/play/" in col_url or "/share/" in col_url) and not col_url.endswith(".m3u8"):
+                col_url = col_url.rstrip("/") + "/index.m3u8"
+            lines = [{
+                "label": "⚡ 4K蓝光秒开 · 极速专线",
+                "provider": "collector_4k",
+                "kind": "hls" if ".m3u8" in col_url else ("mp4" if ".mp4" in col_url else "hls"),
+                "url": col_url,
+                "is_4k": True,
+                "source_type": "juchang8"
+            }]
+            return jsonify({
+                "ok": True,
+                "token": token,
+                "title": ep_info.get("title") or m_title or "车载电影",
+                "lines": lines,
+                "total": 1,
+                "mode": "car_express_4k"
+            })
 
     # 尝试从全局映射与缓存中读取片名
     if not m_title:
@@ -1154,9 +1332,10 @@ def api_browse():
     page = request.args.get("page", "1")
     sort = request.args.get("sort", "") or "heat_desc"
     window = request.args.get("window", "")
+    limit = request.args.get("limit", "48")
     qs = ([] if kind == "all" else ["kind=" + urllib.parse.quote(kind)])
     qs += ["page=" + urllib.parse.quote(page),
-           "limit=" + urllib.parse.quote(request.args.get("limit", "24")), "scope=public"]
+           "limit=" + urllib.parse.quote(limit), "scope=public"]
     for p in ("genre", "area", "language", "status", "orientation",
               "year", "year_gte", "year_lte"):
         v = request.args.get(p, "")
@@ -1171,14 +1350,17 @@ def api_browse():
     if err:
         # 带筛选失败时退回不带筛选，保证页面不空
         qs2 = ([] if kind == "all" else ["kind=" + urllib.parse.quote(kind)])
-        qs2 += ["page=" + urllib.parse.quote(page), "limit=24", "scope=public", "sort=heat_desc"]
+        qs2 += ["page=" + urllib.parse.quote(page), "limit=" + urllib.parse.quote(limit), "scope=public", "sort=heat_desc"]
         d, err = api_get("/v1/browse/catalog?" + "&".join(qs2),
                          cache_key="brw_" + hashlib.md5("&".join(qs2).encode()).hexdigest(), ttl=300)
     if err:
-        return jsonify({"ok": False, "error": err, "items": [], "kind": kind, "page": page}), 502
+        return jsonify({"ok": False, "error": err, "items": [], "kind": kind, "page": page, "has_more": False, "total": 0}), 502
     items = _cards_of(d)
+    pg = d.get("pagination") or {}
+    has_more = bool(pg.get("has_more") if "has_more" in pg else d.get("has_more"))
+    total = pg.get("total") or d.get("total")
     return jsonify({"ok": True, "kind": kind, "page": page, "items": items,
-                    "total": d.get("total"), "has_more": bool(d.get("has_more"))})
+                    "total": total, "has_more": has_more})
 
 
 @app.route("/api/catalog_ui")
