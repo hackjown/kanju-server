@@ -633,6 +633,167 @@ def api_car_play(token):
     })
 
 
+_PAN_TICKET_CACHE = {}
+
+
+def _pan_ref_for(pan_type, target_url=""):
+    pt = (pan_type or "").lower()
+    tu = (target_url or "").lower()
+    if "115" in pt or "115.com" in tu or "115cdn" in tu or "cpats" in tu:
+        return "https://115.com/"
+    if pt == "uc" or "uc.cn" in tu or "ucweb.com" in tu:
+        return "https://drive.uc.cn/"
+    return "https://pan.quark.cn/"
+
+
+def _encode_pan_ticket(payload):
+    import base64
+    raw = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+    return "resolve://pan:" + base64.urlsafe_b64encode(raw).decode("ascii").rstrip("=")
+
+
+def _decode_pan_ticket(ticket):
+    import base64
+    t = (ticket or "").strip()
+    if t.startswith("resolve://"):
+        t = t[10:]
+    if not t.startswith("pan:"):
+        return None
+    b64 = t[4:]
+    pad = "=" * ((4 - len(b64) % 4) % 4)
+    try:
+        return json.loads(base64.urlsafe_b64decode(b64 + pad).decode("utf-8"))
+    except Exception:
+        return None
+
+
+def _resolve_pan_ticket_line(ticket):
+    """实时解析夸克/UC/115 网盘票据，返回准确的代理地址与真实 url_kind ('m3u8' 或 'mp4')"""
+    meta = _decode_pan_ticket(ticket)
+    if not isinstance(meta, dict):
+        return 400, {"ok": False, "error": {"code": "invalid_pan_ticket", "message": "无效的网盘解析票据"}}
+    pwd_id = (meta.get("pwd_id") or "").strip()
+    pan_type = (meta.get("pan_type") or "quark").lower()
+    passcode = (meta.get("passcode") or "").strip()
+    title = (meta.get("title") or "").strip()
+    m_year = meta.get("year")
+    ep_num = meta.get("ep")
+    strict_ep = bool(meta.get("strict"))
+
+    # 构建待尝试的候选列表（pwd_id == "auto" 时复用正在进行的后台搜索，并自动依次尝试前 3 个已绑定网盘分享）
+    candidates = []
+    if pwd_id == "auto" and title:
+        try:
+            shares = _pan_search_budget(title, 8.0) or KPAN.search_pan_shares(title) or []
+            playable = {pt for pt in ("115", "quark", "uc") if KPAN.has_playable_pan_account(pt)}
+            shares.sort(key=lambda x: (0 if (x.get("pan_type") or "").lower() in playable else 1))
+            for s in shares[:3]:
+                pt = (s.get("pan_type") or pan_type or "quark").lower()
+                pw = s.get("pwd_id") or s.get("share_url") or ""
+                if pw and (not playable or pt in playable):
+                    candidates.append((pt, pw, s.get("passcode") or ""))
+            if not candidates and shares:
+                s0 = shares[0]
+                candidates.append(((s0.get("pan_type") or pan_type or "quark").lower(),
+                                   s0.get("pwd_id") or s0.get("share_url") or "",
+                                   s0.get("passcode") or ""))
+        except Exception as e:
+            print(f"[KanjuPan] auto ticket search error: {e}")
+    elif pwd_id and pwd_id != "auto":
+        candidates.append((pan_type, pwd_id, passcode))
+
+    if not candidates:
+        return 502, {"ok": False, "error": {"code": "pan_not_found", "message": "暂未找到可用网盘分享"}}
+
+    now = int(time.time())
+    res = {"ok": False, "error": "网盘取流失败"}
+    chosen_pt, chosen_pwd = pan_type, pwd_id
+
+    for cand_pt, cand_pwd, cand_pc in candidates:
+        chosen_pt, chosen_pwd = cand_pt, cand_pwd
+        if not cand_pc:
+            try:
+                with KPAN._db() as conn:
+                    row = conn.execute(
+                        "SELECT passcode FROM pan_shares_index WHERE pwd_id=? ORDER BY id DESC LIMIT 1",
+                        (cand_pwd,),
+                    ).fetchone()
+                    if row and row["passcode"]:
+                        cand_pc = row["passcode"]
+            except Exception:
+                pass
+
+        ck = (cand_pt, cand_pwd, ep_num if strict_ep else None, m_year, title)
+        hit = _PAN_TICKET_CACHE.get(ck)
+        if hit and hit["expire_at"] > now:
+            res = hit["res"]
+        else:
+            try:
+                KPAN.set_preferred_episode(ep_num, strict=strict_ep, year=m_year, title=title)
+                res = KPAN.parse_pan_video_link(cand_pwd, cand_pt, passcode=cand_pc)
+            except Exception as e:
+                res = {"ok": False, "error": str(e)}
+            finally:
+                try:
+                    KPAN.set_preferred_episode(None, strict=False, year=None, title=None)
+                except Exception:
+                    pass
+            if res.get("ok") and res.get("stream_url"):
+                if len(_PAN_TICKET_CACHE) > 200:
+                    _PAN_TICKET_CACHE.clear()
+                _PAN_TICKET_CACHE[ck] = {"res": res, "expire_at": now + 300}
+        if res.get("ok") and (res.get("stream_url") or ((res.get("files") or [{}])[0].get("stream_url"))):
+            break
+
+    pan_type, pwd_id = chosen_pt, chosen_pwd
+
+    if not res.get("ok"):
+        err = res.get("error") or "网盘取流失败"
+        print(f"[KanjuPan] resolve-line 失败 ({pan_type}:{pwd_id}): {err}")
+        return 502, {"ok": False, "error": {"code": "pan_resolve_failed", "message": err}}
+
+    target_url = res.get("stream_url") or ((res.get("files") or [{}])[0].get("stream_url")) or ""
+    if not target_url.startswith("http"):
+        return 502, {"ok": False, "error": {"code": "pan_no_url", "message": "网盘未返回有效播放地址"}}
+
+    actual_kind = "m3u8" if (res.get("url_kind") == "m3u8" or ".m3u8" in target_url.lower()) else "mp4"
+    ref = _pan_ref_for(pan_type, target_url)
+    proxy_url = f"/proxy?u={urllib.parse.quote(target_url, safe='')}&ref={urllib.parse.quote(ref, safe='')}"
+    if actual_kind == "m3u8":
+        proxy_url += "&format=m3u8"
+
+    line_id = meta.get("id") or f"local:pan:{pan_type}:1"
+    label = meta.get("label") or f"{pan_type.upper()}网盘 · {res.get('quality') or '4K原画'}"
+    ep_count = 1
+    try:
+        ep_count = max(0, int(meta.get("episode_count") or 1))
+    except Exception:
+        ep_count = 1
+    return 200, {
+        "object": "playback.line.resolve",
+        "token": str(meta.get("token") or ""),
+        "episode_count": ep_count,
+        "view": "compact",
+        "line": {
+            "id": line_id,
+            "playback_source_id": line_id,
+            "provider_id": "local_pan",
+            "provider_name": label,
+            "play_from": meta.get("play_from") or f"pan_{pan_type}",
+            "label": label,
+            "display_label": label,
+            "url": proxy_url,
+            "url_kind": actual_kind,
+            "resolved": True,
+            "resolve_mode": "direct",
+            "resolve_required": False,
+            "default_priority": False,
+            "minimum_user_level": 0,
+            "price_multiplier_bps": 0,
+        },
+    }
+
+
 @app.route("/api/resolve_line")
 def api_resolve_line():
     """解析线路：带运营者上游会话通过 POST /v1/playback/resolve-line 立即把 resolve:// 票据换成直链（解决 4K 解析慢与失败问题）。"""
@@ -658,6 +819,21 @@ def api_resolve_line():
 
     if not ticket:
         return jsonify({"ok": False, "error": "未能获取该线路的解析票据 (ticket)"}), 400
+
+    if ticket.startswith("pan:"):
+        st_p, r_p = _resolve_pan_ticket_line(ticket)
+        if st_p == 200:
+            line = r_p.get("line") or {}
+            uk = line.get("url_kind") or "mp4"
+            return jsonify({
+                "ok": True,
+                "url": line.get("url") or "",
+                "kind": "hls" if uk == "m3u8" else uk,
+                "label": line.get("display_label") or line.get("label") or "4K",
+                "tries": 1,
+            })
+        err_msg = (r_p.get("error") or {}).get("message") if isinstance(r_p, dict) else "网盘解析失败"
+        return jsonify({"ok": False, "error": err_msg}), st_p
 
     # 优先查本地 2 小时缓存
     cache_key = f"ticket_res:{ticket[:48]}"
@@ -695,10 +871,12 @@ def api_resolve_line():
     return jsonify({"ok": False, "error": f"解析失败: {err_msg}"}), 502
 
 
-def proxy_m3u8_directly(u, ref):
-    """就地重写并直出 m3u8 播放列表，零 302 跳转延迟，解决播放器跨域与换源卡顿问题"""
+def _pan_proxy_headers(u, ref, range_hdr=None):
+    """根据目标 URL / Referer 构建网盘防盗链请求头（自动注入 115 / 夸克 / UC 最新 Cookie 与客户端 UA）"""
     import urllib.parse as up
     pu = up.urlparse(u)
+    netloc = (pu.netloc or "").lower()
+    ref_l = (ref or "").lower()
     h = {
         "User-Agent": UA,
         "Accept": "*/*",
@@ -706,36 +884,129 @@ def proxy_m3u8_directly(u, ref):
         "Referer": ref,
         "Origin": ref.rstrip("/"),
     }
-    if "115.com" in pu.netloc or "115cdn" in pu.netloc or "cpats" in pu.netloc or ref == "https://115.com/":
+    if range_hdr:
+        h["Range"] = range_hdr
+
+    qu_pan = None
+    if "115.com" in netloc or "115cdn" in netloc or "cpats" in netloc or ref_l == "https://115.com/":
         ck_115 = KPAN.get_active_pan_cookie("115")
         if ck_115:
             h["Cookie"] = ck_115
-    elif "quark" in pu.netloc or "uc.cn" in pu.netloc or ref in ("https://pan.quark.cn/", "https://drive.uc.cn/"):
+    elif ("quark" in netloc or "uc.cn" in netloc or "ucweb.com" in netloc
+          or ref_l in ("https://pan.quark.cn/", "https://drive.uc.cn/")):
         try:
             import juchang8_qu as QU
-            qu_ua, qu_ref, qu_pan = QU.ua_for_host(pu.netloc)
+            qu_ua, qu_ref, qu_pan = QU.ua_for_host(netloc, ref)
+            qu_pan = qu_pan or ("uc" if "drive.uc.cn" in ref_l else "quark")
+            d = QU.DRIVES.get(qu_pan) or {}
+            ck_qu = QU.get_live_cookie(qu_pan) or KPAN.get_active_pan_cookie(qu_pan)
+            if ck_qu:
+                h["Cookie"] = ck_qu
+            if qu_ua or d.get("ua"):
+                h["User-Agent"] = qu_ua or d["ua"]
+            if qu_ref or d.get("ref"):
+                r_use = qu_ref or d["ref"]
+                h["Referer"] = r_use
+                h["Origin"] = r_use.rstrip("/")
         except Exception:
-            qu_ua, qu_ref, qu_pan = None, None, None
-        qu_pan = qu_pan or ("uc" if ref == "https://drive.uc.cn/" else "quark")
-        ck_qu = KPAN.get_active_pan_cookie(qu_pan)
-        if ck_qu:
-            h["Cookie"] = ck_qu
-        if qu_ua:
-            h["User-Agent"] = qu_ua
+            qu_pan = "uc" if "drive.uc.cn" in ref_l else "quark"
+            ck_qu = KPAN.get_active_pan_cookie(qu_pan)
+            if ck_qu:
+                h["Cookie"] = ck_qu
+    return h, qu_pan
 
-    def wrap(absu, r):
-        prefix = request.host_url.rstrip("/") if request else ""
-        return prefix + "/proxy?u=" + up.quote(absu, safe="") + "&ref=" + up.quote(r, safe="")
+
+def _sync_pan_resp_cookie(qu_pan, resp):
+    """把夸克/UC CDN 或接口响应里刷新下发的 __puus / Video-Auth 写回实时 Cookie 缓存"""
+    if qu_pan in ("quark", "uc") and resp is not None:
+        try:
+            import juchang8_qu as QU
+            QU.update_live_cookie(qu_pan, resp)
+        except Exception:
+            pass
+
+
+def _proxy_prefix():
+    if not request:
+        return ""
+    host_url = request.host_url.rstrip("/")
+    proto = (request.headers.get("X-Forwarded-Proto") or "").split(",")[0].strip().lower()
+    if proto == "https" and host_url.startswith("http://"):
+        host_url = "https://" + host_url[7:]
+    return host_url
+
+
+def proxy_m3u8_directly(u, ref):
+    """就地重写并直出 m3u8 播放列表；若上游实际返回的是 MP4 等二进制流，则自动无缝流式透传，绝不整文件读入内存"""
+    import urllib.parse as up
+    range_hdr = request.headers.get("Range") if request else None
+    h, qu_pan = _pan_proxy_headers(u, ref, range_hdr=range_hdr)
+
+    def wrap(absu, r_ref):
+        return _proxy_prefix() + "/proxy?u=" + up.quote(absu, safe="") + "&ref=" + up.quote(r_ref, safe="")
 
     try:
-        r = _sess.get(u, headers=h, timeout=25, allow_redirects=True)
+        r = _sess.get(u, headers=h, timeout=25, allow_redirects=True, stream=True)
     except Exception as e:
         return "upstream error %s" % e, 502
 
-    if r.status_code != 200:
-        return "upstream %s" % r.status_code, r.status_code
+    _sync_pan_resp_cookie(qu_pan, r)
 
-    txt = r.content.decode("utf-8", "ignore")
+    if r.status_code not in (200, 206):
+        st_code = r.status_code
+        if qu_pan and st_code in (403, 412):
+            print(f"[KanjuPan] {qu_pan} CDN 返回 HTTP {st_code} (m3u8代理): {u[:90]}")
+        r.close()
+        return "upstream %s" % st_code, st_code
+
+    ct = (r.headers.get("Content-Type") or "").lower()
+    it = r.iter_content(65536)
+    first_chunk = b""
+    try:
+        for ch in it:
+            if ch:
+                first_chunk = ch
+                break
+    except Exception as e:
+        r.close()
+        return "upstream read error %s" % e, 502
+
+    looks_m3u8 = ("mpegurl" in ct) or (b"#EXTM3U" in first_chunk[:512])
+    if not looks_m3u8:
+        # 上游实际是 MP4 / 二进制流，严禁整文件读入内存，直接流式透传！
+        hdr = {
+            "Access-Control-Allow-Origin": "*",
+            "Access-Control-Allow-Headers": "*",
+            "Cache-Control": "no-store",
+        }
+        for fwd in ("Content-Range", "Accept-Ranges", "Content-Length", "Content-Type"):
+            if fwd in r.headers:
+                hdr[fwd] = r.headers[fwd]
+
+        def passthrough():
+            try:
+                if first_chunk:
+                    yield first_chunk
+                for chunk in it:
+                    if chunk:
+                        yield chunk
+            finally:
+                r.close()
+
+        return Response(passthrough(), status=r.status_code, headers=hdr)
+
+    # 真正的 m3u8 文本清单（通常几十 KB ~ 几百 KB，设 8MB 上限防异常内存占用）
+    buf = bytearray(first_chunk)
+    try:
+        for chunk in it:
+            if chunk:
+                buf.extend(chunk)
+                if len(buf) > 8 * 1024 * 1024:
+                    break
+    finally:
+        r.close()
+
+    txt = bytes(buf).decode("utf-8", "ignore")
     base_url = r.url
     out = []
     for line in txt.splitlines():
@@ -757,7 +1028,7 @@ def proxy_m3u8_directly(u, ref):
 
 @app.route("/proxy", methods=["GET", "HEAD"])
 def proxy():
-    """转发 m3u8 / 子清单 / TS 分片。支持 Range 分片与流式转发，解决 4K / byte-range 分片播放问题。"""
+    """转发 m3u8 / 子清单 / TS 分片 / MP4 流。支持 Range 分片与流式转发，自动维护网盘鉴权 Cookie。"""
     import urllib.parse as up
     u = request.args.get("u")
     if not u or not u.startswith("http"):
@@ -767,38 +1038,13 @@ def proxy():
         return "bad u", 400
     ref = request.args.get("ref") or (pu.scheme + "://" + pu.netloc + "/")
 
-    h = {
-        "User-Agent": UA,
-        "Accept": "*/*",
-        "Accept-Language": "zh-CN,zh;q=0.9",
-        "Referer": ref,
-        "Origin": ref.rstrip("/"),
-    }
-    if request.headers.get("Range"):
-        h["Range"] = request.headers["Range"]
-
-    # 自动为网盘请求（115 / Quark）注入有效 Cookie，确保 m3u8 和分片切片顺利返回 200 而非 403
-    if "115.com" in pu.netloc or "115cdn" in pu.netloc or "cpats" in pu.netloc or ref == "https://115.com/":
-        ck_115 = KPAN.get_active_pan_cookie("115")
-        if ck_115:
-            h["Cookie"] = ck_115
-    elif "quark" in pu.netloc or "uc.cn" in pu.netloc or ref in ("https://pan.quark.cn/", "https://drive.uc.cn/"):
-        try:
-            import juchang8_qu as QU
-            qu_ua, qu_ref, qu_pan = QU.ua_for_host(pu.netloc)
-        except Exception:
-            qu_ua, qu_ref, qu_pan = None, None, None
-        qu_pan = qu_pan or ("uc" if ref == "https://drive.uc.cn/" else "quark")
-        ck_qu = KPAN.get_active_pan_cookie(qu_pan)
-        if ck_qu:
-            h["Cookie"] = ck_qu
-        if qu_ua:
-            h["User-Agent"] = qu_ua
+    h, qu_pan = _pan_proxy_headers(u, ref, range_hdr=request.headers.get("Range"))
 
     # 支持 HEAD 快速嗅探探针
     if request.method == "HEAD":
         try:
             r = _sess.head(u, headers=h, timeout=15, allow_redirects=True)
+            _sync_pan_resp_cookie(qu_pan, r)
             resp = Response("", status=r.status_code)
             for fwd in ("Content-Range", "Accept-Ranges", "Content-Length", "Content-Type"):
                 if fwd in r.headers:
@@ -809,7 +1055,7 @@ def proxy():
         except Exception:
             return Response("", status=200, headers={"Access-Control-Allow-Origin": "*"})
 
-    is_m3u8_url = ".m3u8" in pu.path or "m3u8" in request.args.get("format", "")
+    is_m3u8_url = ".m3u8" in pu.path.lower() or "m3u8" in request.args.get("format", "").lower()
     if is_m3u8_url:
         return proxy_m3u8_directly(u, ref)
 
@@ -818,8 +1064,14 @@ def proxy():
     except Exception as e:
         return "upstream error %s" % e, 502
 
+    _sync_pan_resp_cookie(qu_pan, r)
+
+    if qu_pan and r.status_code in (403, 412):
+        print(f"[KanjuPan] {qu_pan} CDN 返回 HTTP {r.status_code} (/proxy): {u[:90]}")
+
     ct = (r.headers.get("Content-Type") or "").lower()
     if "mpegurl" in ct:
+        r.close()
         return proxy_m3u8_directly(u, ref)
 
     hdr = {
@@ -832,9 +1084,12 @@ def proxy():
             hdr[fwd] = r.headers[fwd]
 
     def gen():
-        for chunk in r.iter_content(262144):
-            if chunk:
-                yield chunk
+        try:
+            for chunk in r.iter_content(262144):
+                if chunk:
+                    yield chunk
+        finally:
+            r.close()
     return Response(gen(), status=r.status_code, headers=hdr)
 
 
@@ -884,11 +1139,14 @@ def _ensure_ffmpeg():
 
 
 def _resolve_stream_target(raw_u):
-    """把 /proxy?u=... 彻底还原为目标真实 URL，并生成反盗链请求头，杜绝本地死锁回环"""
+    """把 /proxy?u=... 彻底还原为目标真实 URL，并生成反盗链请求头（含 115 / 夸克 / UC UA 与 Cookie），杜绝本地死锁回环"""
     u = (raw_u or "").strip()
+    saved_ref = ""
     while "/proxy?" in u:
         parsed = urllib.parse.urlparse(u)
         qs = urllib.parse.parse_qs(parsed.query)
+        if not saved_ref and "ref" in qs and qs["ref"]:
+            saved_ref = qs["ref"][0].strip()
         if "u" in qs and qs["u"]:
             u = qs["u"][0].strip()
         else:
@@ -898,24 +1156,12 @@ def _resolve_stream_target(raw_u):
         u = "https:" + u
 
     pu = urllib.parse.urlparse(u)
-    headers = [
-        f"User-Agent: {UA}",
-    ]
-    ref = pu.scheme + "://" + pu.netloc + "/" if pu.netloc else ""
-    if ref:
-        headers.append(f"Referer: {ref}")
-        headers.append(f"Origin: {ref.rstrip('/')}")
-
-    if pu.netloc and ("115.com" in pu.netloc or "115cdn" in pu.netloc or "cpats" in pu.netloc):
-        try:
-            ck = KPAN.get_active_pan_cookie("115")
-            if ck: headers.append(f"Cookie: {ck}")
-        except Exception: pass
-    elif pu.netloc and "quark" in pu.netloc:
-        try:
-            ck = KPAN.get_active_pan_cookie("quark")
-            if ck: headers.append(f"Cookie: {ck}")
-        except Exception: pass
+    ref = saved_ref or (pu.scheme + "://" + pu.netloc + "/" if pu.netloc else "")
+    h_map, _ = _pan_proxy_headers(u, ref)
+    headers = []
+    for k in ("User-Agent", "Referer", "Origin", "Cookie"):
+        if h_map.get(k):
+            headers.append(f"{k}: {h_map[k]}")
 
     header_str = "\r\n".join(headers) + "\r\n"
     return u, header_str
@@ -2262,12 +2508,19 @@ def proxy_v1(subpath):
         resp.headers["Access-Control-Allow-Headers"] = req_headers or "*"
         return resp
 
-    # 4K / 线路解析快捷通道：带本地 2 小时缓存防耗 + 带运营者上游会话解析
+    # 4K / 线路解析快捷通道：优先处理本地网盘票据 (resolve://pan:...)，其余带本地 2 小时缓存走上游解析
     if subpath == "playback/resolve-line" and request.method == "POST":
         data = request.get_json(silent=True) or {}
         ticket = (data.get("ticket") or "").strip()
         if ticket.startswith("resolve://"):
             ticket = ticket[10:]
+
+        if ticket.startswith("pan:"):
+            st_p, res_p = _resolve_pan_ticket_line(ticket)
+            resp = jsonify(res_p)
+            resp.status_code = st_p
+            resp.headers["Access-Control-Allow-Origin"] = "*"
+            return resp
             
         # 优先读取本地 4K 解析缓存 (TTL 2小时)，避免重复向上游扣除词元
         cache_key = f"ticket_res:{ticket[:48]}"
@@ -3107,7 +3360,9 @@ def proxy_v1(subpath):
             pan_lines = []
             collector_4k_lines = []
             collector_normal_lines = []
-            has_acc = KPAN.has_active_pan_account()
+            playable_pans = {pt for pt in ("115", "quark", "uc") if KPAN.has_playable_pan_account(pt)}
+            is_movie = (isinstance(_cd, dict) and _cd.get("content_kind") == "movie") or (r.get("content_kind") == "movie")
+            m_year = (_cd.get("year") if isinstance(_cd, dict) else None) or r.get("year")
             pan_shares = []
 
             if m_title:
@@ -3115,7 +3370,9 @@ def proxy_v1(subpath):
                 try:
                     pan_shares = _pan_search_budget(m_title, 5.0)
                     if pan_shares:
-                        for idx, s in enumerate(pan_shares[:3]):
+                        # 已绑定账号的网盘优先排在前面，未绑定的排在后面且绝不自动置顶选中
+                        pan_shares.sort(key=lambda x: (0 if (x.get("pan_type") or "quark").lower() in playable_pans else 1))
+                        for idx, s in enumerate(pan_shares[:4]):
                             ptype = (s.get("pan_type") or "quark").lower()
                             pwd = s.get("pwd_id") or s.get("share_url")
                             tag = s.get("quality_tag") or "4K原画"
@@ -3129,46 +3386,102 @@ def proxy_v1(subpath):
                                 color_hint = " · 杜比Profile 5(部分浏览器可能偏色)"
 
                             pname = "夸克" if ptype == "quark" else ("115" if ptype == "115" else "UC")
-                            label_badge = f"⚡ {pname}网盘4K原画 · {tag}{color_hint}" if has_acc else f"☁️ {pname}网盘4K原画 · {tag}{color_hint}"
-                            pan_lines.append({
-                                "default_priority": False,
-                                "id": f"local:pan:{ptype}:{idx+1}",
-                                "label": label_badge,
-                                "minimum_user_level": 0,
-                                "play_from": f"pan_{ptype}",
-                                "preference_weight": 4000 - idx * 10,
-                                "price_multiplier_bps": 0,
-                                "provider_id": "local_pan",
-                                "resolve_mode": "direct",
-                                "resolve_required": False,
-                                "resolved": True,
-                                "selected": False,
-                                "url": (f"/api/pan/stream/{pwd}.m3u8?pan_type={ptype}&passcode={s.get('passcode', '')}&title={urllib.parse.quote(m_title)}&ep={ep_num}&format=m3u8"
-                                        if ptype == "115"
-                                        else f"/api/pan/stream/{pwd}.mp4?pan_type={ptype}&passcode={s.get('passcode', '')}&title={urllib.parse.quote(m_title)}&ep={ep_num}&format=mp4"),
-                                "url_kind": "m3u8" if ptype == "115" else "mp4",
-                                "is_4k": True,
-                                "is_pan": True
-                            })
+                            is_bound = ptype in playable_pans
+                            label_badge = (
+                                f"⚡ {pname}网盘4K原画 · {tag}{color_hint}"
+                                if is_bound
+                                else f"☁️ {pname}网盘4K原画(未绑定) · {tag}{color_hint}"
+                            )
+                            line_id = f"local:pan:{ptype}:{idx+1}"
+                            if ptype == "115":
+                                pan_lines.append({
+                                    "default_priority": False,
+                                    "id": line_id,
+                                    "label": label_badge,
+                                    "minimum_user_level": 0,
+                                    "play_from": f"pan_{ptype}",
+                                    "preference_weight": 4000 - idx * 10,
+                                    "price_multiplier_bps": 0,
+                                    "provider_id": "local_pan",
+                                    "resolve_mode": "direct",
+                                    "resolve_required": False,
+                                    "resolved": True,
+                                    "selected": False,
+                                    "url": f"/api/pan/stream/{pwd}.m3u8?pan_type=115&passcode={s.get('passcode', '')}&title={urllib.parse.quote(m_title)}&year={m_year or ''}&ep={ep_num}&format=m3u8",
+                                    "url_kind": "m3u8",
+                                    "is_4k": True,
+                                    "is_pan": True,
+                                    "is_bound": is_bound,
+                                })
+                            else:
+                                # 夸克 / UC 播放流可能是 m3u8 也可能是 mp4：改为 resolve_ticket 按需解析真实 url_kind，彻底杜绝协议错配
+                                ticket_url = _encode_pan_ticket({
+                                    "pwd_id": pwd,
+                                    "pan_type": ptype,
+                                    "passcode": s.get("passcode") or "",
+                                    "title": m_title,
+                                    "year": m_year,
+                                    "ep": None if is_movie else ep_num,
+                                    "strict": (not is_movie) and bool(ep_num),
+                                    "token": tok,
+                                    "episode_count": int(r.get("episode_count") or 1),
+                                    "id": line_id,
+                                    "label": label_badge,
+                                    "play_from": f"pan_{ptype}",
+                                })
+                                pan_lines.append({
+                                    "default_priority": False,
+                                    "id": line_id,
+                                    "label": label_badge,
+                                    "minimum_user_level": 0,
+                                    "play_from": f"pan_{ptype}",
+                                    "preference_weight": 4000 - idx * 10,
+                                    "price_multiplier_bps": 0,
+                                    "provider_id": "local_pan",
+                                    "resolve_mode": "parse",
+                                    "resolve_required": True,
+                                    "resolved": False,
+                                    "selected": False,
+                                    "url": ticket_url,
+                                    "url_kind": "resolve_ticket",
+                                    "is_4k": True,
+                                    "is_pan": True,
+                                    "is_bound": is_bound,
+                                })
                     else:
                         # 兜底注入引导入口，确保换源抽屉始终展示【☁️ 网盘专线】
+                        guide_ptype = "115" if "115" in playable_pans else ("quark" if "quark" in playable_pans else ("uc" if "uc" in playable_pans else "quark"))
+                        guide_ticket = _encode_pan_ticket({
+                            "pwd_id": "auto",
+                            "pan_type": guide_ptype,
+                            "passcode": "",
+                            "title": m_title,
+                            "ep": None if is_movie else ep_num,
+                            "strict": False,
+                            "token": tok,
+                            "episode_count": int(r.get("episode_count") or 1),
+                            "id": "local:pan:quark:guide",
+                            "label": "☁️ 夸克/115网盘4K · 全网检索",
+                            "play_from": f"pan_{guide_ptype}",
+                        })
                         pan_lines.append({
                             "default_priority": False,
                             "id": "local:pan:quark:guide",
                             "label": "☁️ 夸克/115网盘4K · 全网检索",
                             "minimum_user_level": 0,
-                            "play_from": "pan_quark",
+                            "play_from": f"pan_{guide_ptype}",
                             "preference_weight": 3900,
                             "price_multiplier_bps": 0,
                             "provider_id": "local_pan",
-                            "resolve_mode": "direct",
-                            "resolve_required": False,
-                            "resolved": True,
+                            "resolve_mode": "parse",
+                            "resolve_required": True,
+                            "resolved": False,
                             "selected": False,
-                            "url": f"/api/pan/stream/auto.mp4?pan_type=quark&title={urllib.parse.quote(m_title)}&format=mp4",
-                            "url_kind": "mp4",
+                            "url": guide_ticket,
+                            "url_kind": "resolve_ticket",
                             "is_4k": True,
-                            "is_pan": True
+                            "is_pan": True,
+                            "is_bound": False,
                         })
                 except Exception:
                     pass
@@ -3242,13 +3555,14 @@ def proxy_v1(subpath):
                 ordered_lines.append(l)
 
             # 5. 确定默认选中并置顶生效的第 1 条线路 (selected / default_priority)：
-            # 第一优先级：若网盘已绑定激活且找到实际网盘资源，选网盘第 1 条！
+            # 第一优先级：仅当该网盘类型确实已绑定可用账号且找到资源时，才默认选中对应网盘线路！
             # 第二优先级：否则若有 剧场8 4K，选 剧场8 4K 第 1 条！
             # 第三优先级：否则若有我们的 4K 采集源，选 4K 采集源第 1 条！
             # 第四优先级：最后兜底选中普通采集源第 1 条！
+            bound_pan_lines = [l for l in pan_lines if l.get("is_bound")]
             chosen_line = None
-            if has_acc and pan_shares and pan_lines:
-                chosen_line = pan_lines[0]
+            if bound_pan_lines:
+                chosen_line = bound_pan_lines[0]
             elif juchang8_4k_lines:
                 chosen_line = juchang8_4k_lines[0]
             elif collector_4k_lines:
@@ -3350,13 +3664,13 @@ def api_pan_stream_play(pwd_id):
 
     res = {}
     try:
-        KPAN.set_preferred_episode(request.args.get("ep"))
+        KPAN.set_preferred_episode(request.args.get("ep"), year=request.args.get("year"), title=title)
         res = KPAN.parse_pan_video_link(pwd_id, pan_type, passcode=passcode)
     except Exception as e:
         res = {"ok": False, "error": str(e)}
     finally:
         try:
-            KPAN.set_preferred_episode(None)
+            KPAN.set_preferred_episode(None, year=None, title=None)
         except Exception:
             pass
 
@@ -3365,16 +3679,19 @@ def api_pan_stream_play(pwd_id):
         if not target_url and res.get("files"):
             target_url = res["files"][0].get("stream_url") or res["files"][0].get("url")
         if target_url:
-            ref = ("https://115.com/" if ("115" in pan_type or "115" in target_url or "cpats" in target_url)
-                   else "https://drive.uc.cn/" if (pan_type == "uc" or "uc.cn" in target_url) else "https://pan.quark.cn/")
-            is_m3u8_target = ".m3u8" in target_url or fmt == "m3u8" or res.get("url_kind") == "m3u8"
+            ref = _pan_ref_for(pan_type, target_url)
+            res_kind = (res.get("url_kind") or "").lower()
+            is_m3u8_target = (".m3u8" in target_url.lower()) or (res_kind == "m3u8") or (not res_kind and fmt == "m3u8")
+            needs_proxy = (pan_type in ("115", "quark", "uc")) or any(
+                k in target_url.lower() for k in ("115", "quark", "cpats", "uc.cn", "ucweb.com")
+            )
 
-            # 针对 115 官方原画 m3u8，直接就地代理重写并直出，无需 302 重定向跳转，避免跨域阻断与切源中断
-            if is_m3u8_target and any(k in target_url for k in ("115", "quark", "cpats", "uc.cn")) and target_url.startswith("http"):
+            # 真正的 m3u8 清单直接就地代理重写并直出（内部已做魔数校验，误判为二进制时自动透传）
+            if is_m3u8_target and needs_proxy and target_url.startswith("http"):
                 return proxy_m3u8_directly(target_url, ref)
 
-            # 网盘视频直链通过本地 /proxy 代理，完美绕过 CDN 防盗链（115 / Quark）并支持浏览器 Range 分片拖动
-            if any(k in target_url for k in ("115", "quark", "cpats", "uc.cn")):
+            # 网盘 MP4/原画直链统一通过本地 /proxy 代理，确保注入最新 Cookie / UA 并支持 Range 拖动
+            if needs_proxy and target_url.startswith("http"):
                 proxy_url = f"/proxy?u={urllib.parse.quote(target_url, safe='')}&ref={urllib.parse.quote(ref, safe='')}"
                 resp = redirect(proxy_url, code=302)
                 resp.headers["Access-Control-Allow-Origin"] = "*"

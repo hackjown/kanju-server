@@ -2718,7 +2718,7 @@
       // 直连优先原则：绝大多数源原生支持 CORS，直连播放速度最快（0 本地代理损耗）
       // 针对有跨域限制的采集源 (量子/非凡/暴风/ikun等) 或混合内容/网盘鉴权，自动走本地转发解除 CORS
       const isMixedContent = window.location.protocol === 'https:' && playUrl.startsWith('http://');
-      const isPanAuthRequired = playUrl.includes('115.com') || playUrl.includes('quark.cn') || playUrl.includes('115cdn');
+      const isPanAuthRequired = playUrl.includes('115.com') || playUrl.includes('quark.cn') || playUrl.includes('115cdn') || playUrl.includes('uc.cn') || playUrl.includes('ucweb.com');
       const isKnownCorsRestricted = playUrl.includes('lzcdn') || playUrl.includes('ffzy') || playUrl.includes('fengbao') || playUrl.includes('bfikun') || playUrl.includes('modujx') || playUrl.includes('maoyanplay') || playUrl.includes('wsyzym3u8');
       if (line.needProxy || isMixedContent || isPanAuthRequired || isKnownCorsRestricted) {
         playUrl = window.location.origin + '/proxy?u=' + encodeURIComponent(playUrl);

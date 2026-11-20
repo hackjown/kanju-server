@@ -398,7 +398,7 @@ class Dian115Client:
                         exists = conn.execute("SELECT id FROM pan_shares_index WHERE pwd_id=?", (pwd_id,)).fetchone()
                         if not exists:
                             conn.execute("""
-                            INSERT INTO pan_shares_index (keyword, pan_type, share_url, pwd_id, passcode, title, quality_tag, created_at)
+                            INSERT OR IGNORE INTO pan_shares_index (keyword, pan_type, share_url, pwd_id, passcode, title, quality_tag, created_at)
                             VALUES (?, '115', ?, ?, ?, ?, ?, ?)
                             """, (title, share_url, pwd_id, receive_code, share_title, quality, now))
 

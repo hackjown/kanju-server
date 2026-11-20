@@ -323,7 +323,7 @@ class Api:
                     r = c.get(path, environ_base={"REMOTE_ADDR": "127.0.0.1"}, buffered=False)
                     loc = r.headers.get("Location") or ""
                     if r.status_code in (301, 302, 303, 307, 308):
-                        ok = "/proxy" in loc or any(k in loc for k in ("115", "quark", "cpats", "uc.cn"))
+                        ok = "/proxy" in loc or any(k in loc for k in ("115", "quark", "cpats", "uc.cn", "ucweb.com"))
                         box["r"] = (ok, loc if ok else None)
                     elif r.status_code == 200:
                         head = b""
@@ -552,29 +552,47 @@ _PAN_TTL = 1200        # 网盘直链缓存 20 分钟：避免同一集反复转
 
 
 def _pan_resolve(conn, lo, ep_num=None, movie=False):
-    """直接解析网盘线路，返回 (url, kind, info)；失败返回 (None, None, 原因)。
-    电视拿到的是 /proxy 代理地址（带网盘 Cookie / Referer），不会再触发二次转存。"""
-    raw = lo.get("url") or ""
-    pu = urllib.parse.urlparse(raw)
-    q = dict(urllib.parse.parse_qsl(pu.query))
-    ptype = (q.get("pan_type") or "").lower()
-    if ptype == "uc" or "uc" in str(lo.get("play_from", "")).lower():
-        return None, None, "UC 网盘还不支持取流"
-    pwd = urllib.parse.unquote(pu.path.rsplit("/", 1)[-1])
-    for ext in (".m3u8", ".mp4"):
-        if pwd.endswith(ext):
-            pwd = pwd[: -len(ext)]
+    """直接解析网盘线路（兼容 /api/pan/stream/... 与 resolve://pan:... 票据），返回 (url, kind, info)；失败返回 (None, None, 原因)。
+    电视拿到的是 /proxy 代理地址（带网盘最新 Cookie / UA / Referer），不会再触发二次转存。"""
+    raw = (lo.get("url") or "").strip()
+    ptype, pwd, title, passcode, year = "", "", "", "", None
+
+    if raw.startswith("resolve://pan:") or raw.startswith("pan:"):
+        import base64
+        b64 = raw.split("pan:", 1)[1]
+        pad = "=" * ((4 - len(b64) % 4) % 4)
+        try:
+            meta = json.loads(base64.urlsafe_b64decode(b64 + pad).decode("utf-8"))
+        except Exception:
+            meta = {}
+        ptype = (meta.get("pan_type") or "").lower()
+        pwd = (meta.get("pwd_id") or "").strip()
+        title = (meta.get("title") or "").strip()
+        passcode = (meta.get("passcode") or "").strip()
+        year = meta.get("year")
+    else:
+        pu = urllib.parse.urlparse(raw)
+        q = dict(urllib.parse.parse_qsl(pu.query))
+        ptype = (q.get("pan_type") or "").lower()
+        pwd = urllib.parse.unquote(pu.path.rsplit("/", 1)[-1])
+        for ext in (".m3u8", ".mp4"):
+            if pwd.endswith(ext):
+                pwd = pwd[: -len(ext)]
+        title = q.get("title") or ""
+        passcode = q.get("passcode") or ""
+        year = q.get("year") or None
+
     if not pwd:
         return None, None, "缺少分享码"
     try:
         import juchang8_pan as KPAN
     except Exception as e:
         return None, None, "网盘模块不可用: %r" % e
-    title = q.get("title") or ""
-    passcode = q.get("passcode") or ""
     if pwd == "auto":
         try:
             shares = KPAN.search_pan_shares(title) if title else []
+            playable = {pt for pt in ("115", "quark", "uc") if KPAN.has_playable_pan_account(pt)}
+            shares.sort(key=lambda x: (0 if (x.get("pan_type") or "").lower() in playable else 1))
         except Exception:
             shares = []
         if not shares:
@@ -582,21 +600,21 @@ def _pan_resolve(conn, lo, ep_num=None, movie=False):
         pwd = shares[0].get("pwd_id") or shares[0].get("share_url")
         ptype = (shares[0].get("pan_type") or ptype or "quark").lower()
         passcode = shares[0].get("passcode") or ""
-        if ptype == "uc":
-            return None, None, "UC 网盘还不支持取流"
     ptype = ptype or "quark"
+    if not KPAN.has_playable_pan_account(ptype):
+        return None, None, "暂未绑定 %s 网盘账号" % ptype.upper()
     want = None if movie else ep_num
-    key = (ptype, pwd, want)
+    key = (ptype, pwd, want, year, title)
     hit = _PAN_CACHE.get(key)
     if hit and _now() - hit[0] < _PAN_TTL:
         return hit[1]
-    KPAN.set_preferred_episode(want)
+    KPAN.set_preferred_episode(want, strict=bool(want), year=year, title=title)
     try:
         res = KPAN.parse_pan_video_link(pwd, ptype, passcode=passcode)
     except Exception as e:
         res = {"ok": False, "error": repr(e)}
     finally:
-        KPAN.set_preferred_episode(None)
+        KPAN.set_preferred_episode(None, strict=False, year=None, title=None)
     if not res.get("ok"):
         out = (None, None, res.get("error") or "解析失败")
         _PAN_CACHE[key] = (_now() - _PAN_TTL + 120, out)   # 失败结果只记 2 分钟
@@ -607,8 +625,16 @@ def _pan_resolve(conn, lo, ep_num=None, movie=False):
     fname = res.get("title") or ""
     if want and KPAN._episode_of(fname) not in (None, want):
         return None, None, "网盘里没有第 %s 集" % want
-    ref = "https://115.com/" if ptype == "115" else "https://pan.quark.cn/"
-    kind = "m3u8" if (".m3u8" in target or res.get("url_kind") == "m3u8") else _sniff_kind(KPAN, target, ref, ptype)
+    ref = ("https://115.com/" if ptype == "115"
+           else "https://drive.uc.cn/" if ptype == "uc"
+           else "https://pan.quark.cn/")
+    res_kind = (res.get("url_kind") or "").lower()
+    if ".m3u8" in target.lower() or res_kind == "m3u8":
+        kind = "m3u8"
+    elif res_kind == "mp4":
+        kind = "mp4"
+    else:
+        kind = _sniff_kind(KPAN, target, ref, ptype)
     url = "/proxy?u=" + urllib.parse.quote(target, safe="") + "&ref=" + urllib.parse.quote(ref, safe="")
     if kind == "m3u8":
         url += "&format=m3u8"
@@ -619,16 +645,32 @@ def _pan_resolve(conn, lo, ep_num=None, movie=False):
 
 
 def _sniff_kind(KPAN, target, ref, ptype):
-    """夸克的播放地址常常是不带 .m3u8 后缀的 HLS，取前几个字节判断，避免电视把 m3u8 当 mp4 播放而失败"""
+    """夸克/UC 的播放地址可能是不带 .m3u8 后缀的 HLS，用正确客户端 UA 和最新 Cookie 取前几个字节判断"""
     try:
         import requests
         mod = _app_globals()
-        h = {"User-Agent": getattr(mod, "UA", "Mozilla/5.0"), "Referer": ref, "Range": "bytes=0-15"}
-        ck = KPAN.get_active_pan_cookie(ptype)
+        ua = getattr(mod, "UA", "Mozilla/5.0")
+        ck = ""
+        if ptype in ("quark", "uc"):
+            try:
+                import juchang8_qu as QU
+                ua = (QU.DRIVES.get(ptype) or {}).get("ua") or ua
+                ck = QU.get_live_cookie(ptype)
+            except Exception:
+                pass
+        if not ck:
+            ck = KPAN.get_active_pan_cookie(ptype)
+        h = {"User-Agent": ua, "Referer": ref, "Origin": ref.rstrip("/"), "Range": "bytes=0-63"}
         if ck:
             h["Cookie"] = ck
         r = requests.get(target, headers=h, timeout=8, stream=True)
-        head = next(r.iter_content(16), b"")
+        if ptype in ("quark", "uc"):
+            try:
+                import juchang8_qu as QU
+                QU.update_live_cookie(ptype, r)
+            except Exception:
+                pass
+        head = next(r.iter_content(64), b"")
         ct = (r.headers.get("Content-Type") or "").lower()
         r.close()
         if b"#EXTM3U" in head or "mpegurl" in ct:

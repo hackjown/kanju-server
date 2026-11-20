@@ -1,7 +1,7 @@
 const DEFAULT_CACHE_VERSION = "safe-static-v1";
 const CACHE_VERSION = resolveCacheVersion();
 const CACHE_PREFIX = "ai-movie:static";
-const STATIC_CACHE = `${CACHE_PREFIX}:${CACHE_VERSION}`;
+const STATIC_CACHE = `${CACHE_PREFIX}:${CACHE_VERSION}-panfix1`;
 const OWNED_CACHE_PREFIXES = ["ai-movie:", "kanju-ai:"];
 const STATIC_ASSET_PATH_PREFIX = "/assets/";
 const STATIC_DESTINATIONS = new Set(["font", "image", "script", "style"]);

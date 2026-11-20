@@ -241,7 +241,7 @@ def search_quark_shares_for_movie(title):
                             exists = conn.execute("SELECT id FROM pan_shares_index WHERE pwd_id=?", (pwd_id,)).fetchone()
                             if not exists:
                                 conn.execute("""
-                                INSERT INTO pan_shares_index (keyword, pan_type, share_url, pwd_id, passcode, title, quality_tag, created_at)
+                                INSERT OR IGNORE INTO pan_shares_index (keyword, pan_type, share_url, pwd_id, passcode, title, quality_tag, created_at)
                                 VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                                 """, (raw_title, ptype, full_url, pwd_id, passcode, share_title, quality_tag, now))
                                 conn.commit()

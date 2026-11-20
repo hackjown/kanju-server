@@ -86,15 +86,32 @@ def _restore_accounts():
 
 
 
+def has_playable_pan_account(pan_type):
+    """检查指定网盘是否绑定了可用于实际转存/取流播放的账号（必须存在 pan_accounts 有效 Cookie）"""
+    if not pan_type:
+        return False
+    try:
+        init_pan_db()
+        with _db() as conn:
+            row = conn.execute(
+                "SELECT id FROM pan_accounts WHERE pan_type=? AND status='active' AND length(trim(coalesce(cookie,'')))>0 LIMIT 1",
+                (pan_type.lower(),),
+            ).fetchone()
+            return bool(row)
+    except Exception as e:
+        print(f"[KanjuPan] has_playable_pan_account error: {e}")
+    return False
+
+
 def has_active_pan_account(pan_type=None):
     """检查本地是否已绑定并激活网盘账号或点115账号"""
     try:
         init_pan_db()
         with _db() as conn:
             if pan_type:
-                row = conn.execute("SELECT id FROM pan_accounts WHERE pan_type=? AND status='active' LIMIT 1", (pan_type,)).fetchone()
+                row = conn.execute("SELECT id FROM pan_accounts WHERE pan_type=? AND status='active' AND length(trim(coalesce(cookie,'')))>0 LIMIT 1", (pan_type,)).fetchone()
             else:
-                row = conn.execute("SELECT id FROM pan_accounts WHERE status='active' LIMIT 1").fetchone()
+                row = conn.execute("SELECT id FROM pan_accounts WHERE status='active' AND length(trim(coalesce(cookie,'')))>0 LIMIT 1").fetchone()
             if row:
                 return True
 
@@ -367,9 +384,11 @@ def check_qr_quark(session_row):
             if not st:
                 return "scanned", None, None
                 
-            # 拿 service_ticket 换夸克网页端 Cookie：account/info 下发 __pus，再请求一次 config 拿到 __puus
+            # 拿 service_ticket 换夸克网页端 Cookie：account/info 下发 __pus，再请求一次 config/member 拿到 __puus 与会员身份
+            import juchang8_qu as QU
+            qk_ua = QU.DRIVES["quark"]["ua"]
             sess = requests.Session()
-            sess.headers.update({"User-Agent": headers["User-Agent"], "Referer": "https://pan.quark.cn/",
+            sess.headers.update({"User-Agent": qk_ua, "Referer": "https://pan.quark.cn/",
                                  "Origin": "https://pan.quark.cn"})
             r_info = sess.get("https://pan.quark.cn/account/info", params={"st": st, "lw": "scan"}, timeout=8)
             try:
@@ -394,9 +413,25 @@ def check_qr_quark(session_row):
                 info_data = r_info.json().get("data") or {}
             except Exception:
                 pass
+            # 用 /member 获取准确会员类型并同步续期 __puus
+            try:
+                rm = requests.get("https://drive-pc.quark.cn/1/clouddrive/member",
+                                  params={"pr": "ucpro", "fr": "pc", "fetch_subscribe": "true", "_ch": "home", "fetch_identity": "true"},
+                                  headers={"User-Agent": qk_ua, "Referer": "https://pan.quark.cn/", "Cookie": cookie_str}, timeout=6)
+                mj = rm.json()
+                if mj.get("code") == 0:
+                    md = mj.get("data") or {}
+                    if md.get("member_type"):
+                        info_data["member_type"] = md["member_type"]
+                for k, v in rm.cookies.get_dict().items():
+                    jar[k] = v
+                cookie_str = "; ".join(f"{k}={v}" for k, v in jar.items())
+            except Exception:
+                pass
                 
             nickname = info_data.get("nickname") or info_data.get("user_name") or "夸克用户"
-            is_svip = bool(info_data.get("is_svip") or info_data.get("is_vip") or "svip" in r_info.text.lower())
+            mt = str(info_data.get("member_type") or "").upper()
+            is_svip = bool("SVIP" in mt or "VIP" in mt or info_data.get("is_svip") or info_data.get("is_vip") or "svip" in r_info.text.lower())
             user_info = {
                 "uid": str(info_data.get("uid") or info_data.get("id") or ""),
                 "user_name": nickname,
@@ -511,11 +546,13 @@ def check_qr_uc(session_row):
                 info = r_info.json().get("data") or {}
             except Exception:
                 pass
-            # 再用 pc-api 校验一次 Cookie 是否可用
+            # 再用 pc-api 校验一次 Cookie 是否可用（统一使用取流时的 UCBrowser UA）
             try:
+                import juchang8_qu as QU
+                uc_ua = QU.DRIVES["uc"]["ua"]
                 rv = requests.get("https://pc-api.uc.cn/1/clouddrive/member",
                                   params={"pr": "UCBrowser", "fr": "pc", "fetch_subscribe": "true"},
-                                  headers={"User-Agent": _UC_UA, "Referer": "https://drive.uc.cn/", "Cookie": cookie_str}, timeout=6)
+                                  headers={"User-Agent": uc_ua, "Referer": "https://drive.uc.cn/", "Cookie": cookie_str}, timeout=6)
                 mj = rv.json()
                 if mj.get("status") == 200 or mj.get("code") == 0:
                     md = mj.get("data") or {}
@@ -636,11 +673,20 @@ def get_qr_session_status(session_id):
 # ==========================================================
 
 def get_active_pan_cookie(pan_type="115"):
-    """获取指定网盘当前激活账号的完整 Cookie"""
+    """获取指定网盘当前激活账号的完整 Cookie（夸克/UC 自动合并内存中最新的 Video-Auth 与 __puus）"""
     init_pan_db()
+    pt = (pan_type or "115").lower()
+    if pt in ("quark", "uc"):
+        try:
+            import juchang8_qu as QU
+            ck = QU.get_live_cookie(pt)
+            if ck:
+                return ck
+        except Exception:
+            pass
     try:
         with _db() as conn:
-            row = conn.execute("SELECT cookie FROM pan_accounts WHERE pan_type=? AND status='active' ORDER BY id DESC LIMIT 1", (pan_type,)).fetchone()
+            row = conn.execute("SELECT cookie FROM pan_accounts WHERE pan_type=? AND status='active' ORDER BY id DESC LIMIT 1", (pt,)).fetchone()
             return row["cookie"] if row else ""
     except Exception:
         return ""
@@ -811,6 +857,11 @@ def _norm_title(t):
 
 
 _PANSOU_CACHE = {}
+_PANSOU_BAD = {}   # ep -> 失败时间戳，10分钟内跳过挂掉的公共节点，避免拖垮 5s 搜索预算
+_LEGACY_FAKE_PWDS = (
+    "b84180860882", "a7c5b6903211", "f481c905de12",
+    "d8745bc3901a", "sw3p56z3o2e", "sw3p888999a",
+)
 
 
 def search_pansou(keyword, types=("quark", "uc"), limit_each=12):
@@ -822,21 +873,27 @@ def search_pansou(keyword, types=("quark", "uc"), limit_each=12):
         return [dict(x) for x in hit[1]]
     kw_n = _norm_title(keyword)
     out, seen = [], set()
+    now_f = time.time()
+    eps_ = [ep for ep in _pansou_endpoints() if now_f - _PANSOU_BAD.get(ep, 0) > 600]
+    if not eps_:
+        return []
 
     def _one(ep):
         try:
             r = requests.get(ep, params={"kw": keyword, "cloud_types": ",".join(types), "res": "merge"},
-                             timeout=9, headers={"User-Agent": "Mozilla/5.0 Juchang8Pan/1.1"})
+                             timeout=4, headers={"User-Agent": "Mozilla/5.0 Juchang8Pan/1.1"})
             if r.status_code != 200:
                 print(f"[KanjuPan] PanSou {ep} 返回 {r.status_code}")
+                if r.status_code >= 500 or r.status_code in (403, 404, 429):
+                    _PANSOU_BAD[ep] = time.time()
                 return {}
             return ((r.json() or {}).get("data") or {}).get("merged_by_type") or {}
         except Exception as e:
             print(f"[KanjuPan] PanSou {ep} 超时/异常: {type(e).__name__}")
+            _PANSOU_BAD[ep] = time.time()
             return {}
 
     from concurrent.futures import ThreadPoolExecutor
-    eps_ = _pansou_endpoints()
     with ThreadPoolExecutor(max_workers=max(1, len(eps_))) as ex:
         all_merged = list(ex.map(_one, eps_))
     for merged in all_merged:
@@ -869,17 +926,16 @@ def search_pansou(keyword, types=("quark", "uc"), limit_each=12):
         now = int(time.time())
         with _db() as conn:
             for it in out:
-                if not conn.execute("SELECT id FROM pan_shares_index WHERE pwd_id=?", (it["pwd_id"],)).fetchone():
-                    conn.execute("INSERT INTO pan_shares_index (keyword, pan_type, share_url, pwd_id, passcode, title, quality_tag, created_at) "
-                                 "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-                                 (keyword, it["pan_type"], it["share_url"], it["pwd_id"], it["passcode"], it["title"], it["quality_tag"], now))
+                conn.execute("INSERT OR IGNORE INTO pan_shares_index (keyword, pan_type, share_url, pwd_id, passcode, title, quality_tag, created_at) "
+                             "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                             (keyword, it["pan_type"], it["share_url"], it["pwd_id"], it["passcode"], it["title"], it["quality_tag"], now))
             conn.commit()
         _PANSOU_CACHE[ck] = (time.time(), [dict(x) for x in out])
         print(f"[KanjuPan] PanSou 搜到 {keyword}: 夸克 {sum(1 for x in out if x['pan_type']=='quark')} 个，UC {sum(1 for x in out if x['pan_type']=='uc')} 个")
     return out
 
 def init_pan_advanced_db():
-    """补齐网盘高级索引表与转存记录表"""
+    """补齐网盘高级索引表与转存记录表，自动清理历史假种子与重复索引并建唯一约束"""
     with _db() as conn:
         conn.execute("""
         CREATE TABLE IF NOT EXISTS pan_shares_index (
@@ -916,22 +972,19 @@ def init_pan_advanced_db():
             val TEXT
         )
         """)
-        # 预设初始种子片单，保证开箱即搜
-        now = int(time.time())
-        sample_seeds = [
-            ("庆余年", "quark", "https://pan.quark.cn/s/b84180860882", "b84180860882", "", "庆余年 第一季+第二季 4K 60帧 完整蓝光版", "4K 60帧"),
-            ("繁花", "quark", "https://pan.quark.cn/s/a7c5b6903211", "a7c5b6903211", "", "繁花 沪语+国语 双语 4K 超清纯净版", "4K原画"),
-            ("沙丘", "115", "https://115.com/s/sw3p56z3o2e", "sw3p56z3o2e", "", "沙丘1+2 IMAX 4K REMUX 杜比视界高码率原盘", "4K蓝光原盘"),
-            ("黑神话", "quark", "https://pan.quark.cn/s/f481c905de12", "f481c905de12", "", "黑神话：悟空 全剧情电影4K剪辑合集", "4K原画"),
-            ("周处除三害", "quark", "https://pan.quark.cn/s/d8745bc3901a", "d8745bc3901a", "", "周处除三害 4K 未删减超清珍藏版", "4K原画"),
-            ("漫长的季节", "115", "https://115.com/s/sw3p888999a", "sw3p888999a", "", "漫长的季节 全集 4K 杜比视界蓝光", "4K蓝光原盘")
-        ]
-        for s in []:   # 旧版的示例片单是假链接，不再写入（已有的会被有效性检查自动清掉）
+        # 清理旧版本遗留的假示例种子 + 按 (pan_type, pwd_id) 去重并补唯一索引
+        try:
+            ph = ",".join("?" for _ in _LEGACY_FAKE_PWDS)
+            conn.execute(f"DELETE FROM pan_shares_index WHERE pwd_id IN ({ph})", _LEGACY_FAKE_PWDS)
             conn.execute("""
-            INSERT OR IGNORE INTO pan_shares_index 
-            (keyword, pan_type, share_url, pwd_id, passcode, title, quality_tag, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-            """, (s[0], s[1], s[2], s[3], s[4], s[5], s[6], now))
+                DELETE FROM pan_shares_index
+                WHERE id NOT IN (
+                    SELECT MAX(id) FROM pan_shares_index GROUP BY pan_type, pwd_id
+                )
+            """)
+            conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_pan_shares_type_pwd ON pan_shares_index(pan_type, pwd_id)")
+        except Exception as e:
+            print(f"[KanjuPan] 清理/去重 pan_shares_index 异常: {e}")
         conn.commit()
 
 
@@ -1033,7 +1086,7 @@ def search_pan_online(keyword, pan_type=None):
                 exists = conn.execute("SELECT id FROM pan_shares_index WHERE pwd_id=? OR share_url=?", (it["pwd_id"], it["share_url"])).fetchone()
                 if not exists:
                     conn.execute("""
-                    INSERT INTO pan_shares_index 
+                    INSERT OR IGNORE INTO pan_shares_index 
                     (keyword, pan_type, share_url, pwd_id, title, quality_tag, created_at)
                     VALUES (?, ?, ?, ?, ?, ?, ?)
                     """, (it["keyword"], it["pan_type"], it["share_url"], it["pwd_id"], it["title"], it["quality_tag"], now))
@@ -1071,12 +1124,20 @@ import threading as _th
 _PICK = _th.local()
 
 
-def set_preferred_episode(n):
-    """TV / 播放端在解析前设置想看的集数，rank_video_file 会优先挑这一集（同一线程内有效）"""
+def set_preferred_episode(n, strict=False, year=None, title=None):
+    """TV / 播放端在解析前设置想看的集数/年份/片名，rank_video_file 会优先匹配对应版本（同一线程内有效）"""
     try:
         _PICK.ep = int(n) if n else None
+        _PICK.strict = bool(strict and _PICK.ep)
     except Exception:
         _PICK.ep = None
+        _PICK.strict = False
+    try:
+        y = int(year) if year else None
+        _PICK.year = y if (y and 1900 <= y <= 2099) else None
+    except Exception:
+        _PICK.year = None
+    _PICK.title = (title or "").strip()
 
 
 def _episode_of(name):
@@ -1110,9 +1171,14 @@ def color_profile(name):
 
 
 def rank_video_file(f):
-    """网盘内视频文件排序打分器：先挑对集数，再挑 4K 且色彩不会出错的版本"""
+    """网盘内视频文件排序打分器：先挑对集数，再匹配目标年份/片名（防合集选错前作），再挑 4K 且色彩不会出错的版本"""
     name = (f.get("n") or f.get("file_name") or "").lower()
+    dir_path = (f.get("_path") or "").lower()
+    match_text = f"{dir_path} {name}".strip()
     score = 0
+    if name.endswith((".iso", ".img", ".bdmv", ".mds", ".mdf")):
+        score -= 2000
+
     want = getattr(_PICK, "ep", None)
     if want:
         ep = _episode_of(name)
@@ -1120,6 +1186,29 @@ def rank_video_file(f):
             score += 1000
         elif ep is not None:
             score -= 1000
+
+    # 合集按年份精准匹配：避免如《哪吒之魔童闹海(2025)》选中同合集里的 2019 第一部
+    want_year = getattr(_PICK, "year", None)
+    if want_year:
+        years = [int(y) for y in re.findall(r"(?<!\d)(19\d\d|20\d\d)(?!\d)", match_text)]
+        if want_year in years:
+            score += 600
+        elif years and all(abs(y - want_year) >= 2 for y in years):
+            score -= 600
+
+    # 合集按片名/副标题匹配（如“哪吒之魔童闹海” vs “哪吒之魔童降世”）
+    want_title = getattr(_PICK, "title", "")
+    if want_title:
+        norm_wt = _norm_title(want_title)
+        norm_mt = _norm_title(match_text)
+        if len(norm_wt) >= 2 and norm_wt in norm_mt:
+            score += 300
+        else:
+            # 副标题精准命中（如“之魔童闹海”里的“魔童闹海”）
+            sub_m = re.search(r"[之:：·\-\s]([\u4e00-\u9fff]{3,})$", want_title)
+            if sub_m and _norm_title(sub_m.group(1)) in norm_mt:
+                score += 250
+
     if "2160p" in name or "4k" in name: score += 100
     elif "1080p" in name: score += 40
 
@@ -1253,8 +1342,19 @@ def search_pan_shares(keyword, pan_type=None):
     want_qu = not pan_type or pan_type in ("quark", "uc")
     has_qu = any((r.get("pan_type") or "").lower() in ("quark", "uc") for r in out)
     if want_qu and not has_qu:
-        # 本地索引里的都不能用了，现搜一次 PanSou 再验证
-        fresh = search_pansou(keyword, [pan_type] if pan_type else ["quark", "uc"])
+        # 本地索引里的都不能用了，现搜一次 WoGG + PanSou 再验证
+        fresh = []
+        try:
+            import juchang8_quark as KQ
+            kq_cfg = KQ.get_quark_hub_config()
+            if kq_cfg and kq_cfg.get("status") == "active":
+                fresh.extend(KQ.search_quark_shares_for_movie(keyword) or [])
+        except Exception as e:
+            print(f"[KanjuPan] QuarkHub 补充检索异常: {e}")
+        if not fresh:
+            fresh = search_pansou(keyword, [pan_type] if pan_type else ["quark", "uc"]) or []
+        if pan_type in ("quark", "uc"):
+            fresh = [r for r in fresh if (r.get("pan_type") or "").lower() == pan_type]
         if fresh:
             more, d2 = _filter_alive(fresh, keyword)
             n_dead += d2
@@ -1360,7 +1460,7 @@ def add_indexed_share(keyword, pan_type, share_url, title="", quality_tag="4K原
     pwd_id = share_url.split("/s/")[-1].split("?")[0].strip() if "/s/" in share_url else share_url
     with _db() as conn:
         conn.execute("""
-        INSERT INTO pan_shares_index (keyword, pan_type, share_url, pwd_id, title, quality_tag, created_at)
+        INSERT OR REPLACE INTO pan_shares_index (keyword, pan_type, share_url, pwd_id, title, quality_tag, created_at)
         VALUES (?, ?, ?, ?, ?, ?, ?)
         """, (keyword.strip(), pan_type.lower(), share_url.strip(), pwd_id, title.strip() or f"{keyword} {quality_tag}", quality_tag, now))
         conn.commit()
@@ -1615,7 +1715,7 @@ def auto_transfer_and_play_115(pwd_id, cookie, passcode=""):
 
     snap_data = r.get("data") or {}
     file_list = snap_data.get("list") or []
-    video_exts = (".mp4", ".mkv", ".ts", ".mov", ".flv", ".webm", ".avi", ".m4v", ".iso")
+    video_exts = (".mp4", ".mkv", ".ts", ".mov", ".flv", ".webm", ".avi", ".m4v")
     video_files = [f for f in file_list if any((f.get("n") or f.get("file_name") or "").lower().endswith(ext) for ext in video_exts)]
 
     # 若首层为文件夹目录，自动穿透拉取子目录文件列表 (支持嵌套目录)
@@ -1628,7 +1728,13 @@ def auto_transfer_and_play_115(pwd_id, cookie, passcode=""):
                     sub_r = requests.get(sub_url, headers=headers, timeout=8).json()
                     if sub_r.get("state"):
                         sub_list = sub_r.get("data", {}).get("list") or []
-                        sub_vids = [item for item in sub_list if any((item.get("n") or item.get("file_name") or "").lower().endswith(ext) for ext in video_exts)]
+                        dir_name = (f.get("n") or f.get("file_name") or "").strip()
+                        sub_vids = []
+                        for item in sub_list:
+                            if any((item.get("n") or item.get("file_name") or "").lower().endswith(ext) for ext in video_exts):
+                                if dir_name:
+                                    item["_path"] = dir_name
+                                sub_vids.append(item)
                         if sub_vids:
                             video_files.extend(sub_vids)
                 except Exception:
@@ -1726,7 +1832,7 @@ def auto_transfer_and_play_115(pwd_id, cookie, passcode=""):
 def purge_expired_transfers(force_all=False):
     """自动清理守护任务：
     1. 查询超过 24 小时的转存文件（或 force_all 立即强制清空）；
-    2. 调用网盘删除接口彻底移除临时文件。
+    2. 调用网盘删除接口彻底移除临时文件（force_all 时同时清理 /__Juchang8Temp__/ 历史残留）。
     """
     init_pan_advanced_db()
     now = int(time.time())
@@ -1735,10 +1841,7 @@ def purge_expired_transfers(force_all=False):
             rows = conn.execute("SELECT * FROM pan_transfers WHERE status='saved'").fetchall()
         else:
             rows = conn.execute("SELECT * FROM pan_transfers WHERE status='saved' AND expires_at<=?", (now,)).fetchall()
-        
-        if not rows:
-            return {"ok": True, "purged_count": 0, "message": "当前没有需要清理的过期文件"}
-            
+
         purged_count = 0
         import juchang8_qu as QU
         by_pan = {}
@@ -1751,16 +1854,27 @@ def purge_expired_transfers(force_all=False):
                 if acc and acc["cookie"]:
                     QU.delete_files(pt, acc["cookie"], fids)
 
+        # force_all 时额外清掉 /__Juchang8Temp__/ 下未登记的残留文件（不碰根目录个人文件）
+        orphan_purged = 0
+        if force_all:
+            for pt in ("quark", "uc"):
+                acc = conn.execute("SELECT cookie FROM pan_accounts WHERE pan_type=? AND status='active' ORDER BY id DESC LIMIT 1", (pt,)).fetchone()
+                if acc and acc["cookie"]:
+                    orphan_purged += QU.purge_temp_dir(pt, acc["cookie"])
+
+        if not rows and not orphan_purged:
+            return {"ok": True, "purged_count": 0, "message": "当前没有需要清理的过期文件"}
+
         # 更新数据库状态
         for r in rows:
             conn.execute("UPDATE pan_transfers SET status='purged' WHERE id=?", (r["id"],))
             purged_count += 1
         conn.commit()
-        
+        total_purged = purged_count + orphan_purged
         return {
             "ok": True,
-            "purged_count": purged_count,
-            "message": f"成功清理 {purged_count} 个网盘临时转存文件！"
+            "purged_count": total_purged,
+            "message": f"成功清理 {total_purged} 个网盘临时转存文件！"
         }
 
 
